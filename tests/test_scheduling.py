@@ -192,6 +192,31 @@ class ApiTests(unittest.TestCase):
         self.dispatcher.get.side_effect = KeyError('missing')
         self.assertEqual(self.client.get('/jobs/missing',headers=self.headers).status_code, 404)
 
+    def test_today_trigger_accepts_only_all_or_one_source(self):
+        self.dispatcher.submit.return_value = {'id': 'test', 'target_date': '2026-11-19', 'status': 'queued'}
+        for payload, sources in [
+            ({'scope': 'all'}, []),
+            ({'scope': 'source', 'source_id': 'web:servethehome'}, ['web:servethehome']),
+        ]:
+            with self.subTest(payload=payload):
+                result = self.client.post('/jobs/today', headers=self.headers, json=payload)
+                self.assertEqual(result.status_code, 202, result.text)
+                self.assertEqual(result.json()['target_date'], '2026-11-19')
+                self.dispatcher.submit.assert_called_with(command='collect', sources=sources, trigger='api')
+
+        self.dispatcher.submit.reset_mock()
+        for invalid in ({}, {'scope': 'source'}, {'scope': 'source', 'source_id': ''},
+                        {'scope': 'all', 'source_id': 'web:servethehome'},
+                        {'scope': 'all', 'limit': 1}, {'scope': 'all', 'target_date': '2026-11-18'}):
+            self.assertEqual(self.client.post('/jobs/today', headers=self.headers, json=invalid).status_code, 422)
+        self.assertEqual(self.client.post('/jobs/today', json={'scope': 'all'}).status_code, 401)
+        self.dispatcher.submit.assert_not_called()
+        self.dispatcher.submit.side_effect = BusyError('busy')
+        self.assertEqual(self.client.post('/jobs/today', headers=self.headers, json={'scope': 'all'}).status_code, 409)
+        self.dispatcher.submit.side_effect = ValueError('unknown source')
+        result = self.client.post('/jobs/today', headers=self.headers, json={'scope': 'source', 'source_id': 'typo'})
+        self.assertEqual(result.status_code, 422)
+
 
 class ScheduleAndLoggingTests(unittest.TestCase):
     def test_default_schedule_is_daily_in_shanghai(self):

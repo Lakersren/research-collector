@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import secrets
 import sys
-from typing import Literal
+from typing import Annotated, Literal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'lib'))
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -62,6 +62,20 @@ class ScheduleJob(JobRequest):
     id: str = Field(min_length=1)
     enabled: bool = True
     cron: str
+
+
+class AllSourcesRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    scope: Literal['all']
+
+
+class SingleSourceRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    scope: Literal['source']
+    source_id: str = Field(min_length=1)
+
+
+TodayJobRequest = Annotated[AllSourcesRequest | SingleSourceRequest, Field(discriminator='scope')]
 
 
 def scheduled_submit(dispatcher, item):
@@ -130,14 +144,22 @@ def create_app(config_path=None, dispatcher_factory=Dispatcher, *, batch_root=No
         return [{'id': job.id, 'next_run_at': job.next_run_time.isoformat() if job.next_run_time else None}
                 for job in app.state.scheduler.get_jobs()]
 
-    @app.post('/jobs', status_code=202, dependencies=[Depends(authenticated)])
-    def submit(request: JobRequest):
+    def submit_job(**options):
         try:
-            return app.state.dispatcher.submit(**request.model_dump(), trigger='api')
+            return app.state.dispatcher.submit(**options, trigger='api')
         except BusyError as e:
             raise HTTPException(status_code=409, detail=str(e)) from None
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e)) from None
+
+    @app.post('/jobs', status_code=202, dependencies=[Depends(authenticated)])
+    def submit(request: JobRequest):
+        return submit_job(**request.model_dump())
+
+    @app.post('/jobs/today', status_code=202, dependencies=[Depends(authenticated)])
+    def submit_today(request: TodayJobRequest):
+        sources = [request.source_id] if isinstance(request, SingleSourceRequest) else []
+        return submit_job(command='collect', sources=sources)
 
     @app.get('/jobs', dependencies=[Depends(authenticated)])
     def recent():

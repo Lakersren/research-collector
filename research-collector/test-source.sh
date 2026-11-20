@@ -58,7 +58,7 @@ def request(port, token, path, payload=None):
         conn.close()
 
 
-def choose_sources(sources, selection):
+def choose_scope(sources, selection):
     if not sources:
         raise RuntimeError("采集服务没有配置来源")
     interactive = selection is None
@@ -72,11 +72,11 @@ def choose_sources(sources, selection):
         if not choice and interactive:
             return None
         if choice == "all":
-            return sources
+            return {"scope": "all"}
         if choice.isdecimal() and len(choice) <= len(str(len(sources))):
             number = int(choice)
             if 1 <= number <= len(sources):
-                return [sources[number - 1]]
+                return {"scope": "source", "source_id": sources[number - 1]["id"]}
         if not interactive:
             raise ValueError(f"请输入 1–{len(sources)} 的编号或 all")
         print("编号无效，请重新输入。")
@@ -144,15 +144,14 @@ def main():
     parser.add_argument("source", nargs="?", help="来源编号或 all，省略时交互选择")
     args = parser.parse_args(sys.argv[2:])
     port, token = settings()
-    sources = choose_sources(request(port, token, "/sources"), args.source)
-    if sources is None:
+    sources = request(port, token, "/sources")
+    payload = choose_scope(sources, args.source)
+    if payload is None:
         return 0
-    job = request(port, token, "/jobs", {
-        "sources": [source["id"] for source in sources],
-        "timeout_seconds": JOB_TIMEOUT_SECONDS,
-    })
+    job = request(port, token, "/jobs/today", payload)
     job_id, run_id = job["id"], job["run_id"]
-    print(f"正在采集 {len(sources)} 个来源，任务 ID {job_id}", flush=True)
+    count = len(sources) if payload["scope"] == "all" else 1
+    print(f"正在采集 {count} 个来源，任务 ID {job_id}", flush=True)
     started = time.monotonic()
     last_update = started
     while job["status"] in {"queued", "running"}:
