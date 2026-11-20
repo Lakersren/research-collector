@@ -1,0 +1,135 @@
+{
+  "$defs": {
+    "Collection": {
+      "additionalProperties": false,
+      "properties": {
+        "started_at": {
+          "title": "Started At",
+          "type": "string"
+        },
+        "finished_at": {
+          "title": "Finished At",
+          "type": "string"
+        },
+        "n_discovered": {
+          "minimum": 0,
+          "title": "N Discovered",
+          "type": "integer"
+        },
+        "n_fetched": {
+          "minimum": 0,
+          "title": "N Fetched",
+          "type": "integer"
+        },
+        "n_failed": {
+          "minimum": 0,
+          "title": "N Failed",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "success",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        }
+      },
+      "required": [
+        "started_at",
+        "finished_at",
+        "n_discovered",
+        "n_fetched",
+        "n_failed",
+        "status"
+      ],
+      "title": "Collection",
+      "type": "object"
+    },
+    "File": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "size": {
+          "maximum": 268435456,
+          "minimum": 1,
+          "title": "Size",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "size",
+        "sha256"
+      ],
+      "title": "File",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1,
+      "default": 1,
+      "title": "Version",
+      "type": "integer"
+    },
+    "id": {
+      "pattern": "^\\d{20}-[0-9a-f]{32}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "source_id": {
+      "maxLength": 191,
+      "minLength": 1,
+      "title": "Source Id",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "string"
+    },
+    "collection": {
+      "$ref": "#/$defs/Collection"
+    },
+    "files": {
+      "items": {
+        "$ref": "#/$defs/File"
+      },
+      "maxItems": 50000,
+      "minItems": 1,
+      "title": "Files",
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "source_id",
+    "created_at",
+    "collection",
+    "files"
+  ],
+  "title": "Manifest",
+  "type": "object"
+}

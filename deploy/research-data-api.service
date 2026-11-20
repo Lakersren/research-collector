@@ -1,0 +1,17 @@
+[Unit]
+Description=Research Data API and MCP (server B)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=corpus
+Group=corpus
+WorkingDirectory=/opt/research-data-platform/research-data-service
+EnvironmentFile=/opt/research-data-platform/research-data-service/etc/api.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/research-data-platform/research-data-service/.venv/bin/python api_service.py
+Restart=on-failure
+RestartSec=10
+UMask=0077
+[Install]
+WantedBy=multi-user.target

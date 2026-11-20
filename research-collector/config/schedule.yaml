@@ -1,0 +1,9 @@
+timezone: Asia/Shanghai
+jobs:
+  - id: collect-all
+    enabled: true
+    # 每天 01:00，仅采集北京时间昨天发布的文章；执行前清理七天前的本地数据。
+    cron: "0 1 * * *"
+    command: collect
+    sources: []
+    timeout_seconds: 7200

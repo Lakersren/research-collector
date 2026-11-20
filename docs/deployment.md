@@ -1,0 +1,45 @@
+# A 采集服务部署
+
+将 `research-collector.tar.gz` 上传到 A 的 `~/Downloads`，用日常运维账号执行。需要重新打包时，在本地仓库根目录运行 `python3 deploy/build_release.py research-collector`，包在 `dist/`。
+
+## 首次安装
+
+```bash
+sudo mkdir -p /opt/app
+sudo tar -zxf ~/Downloads/research-collector.tar.gz -C /opt/app
+cd /opt/app/research-collector
+bash setup.sh
+bash start.sh
+```
+
+`setup.sh` 初始化 Python、注册服务并生成 `etc/collector.env`。默认直连外部网站，管理接口监听本机 `127.0.0.1:8000`。如果服务器通过代理出网，在启动前修改 `etc/collector.env`。`start.sh` 会安装依赖并启动服务。
+
+## 已安装，更新代码
+
+等当前采集结束，上传新包后执行以下命令。直接覆盖同名文件，保留旧项目目录里的配置和数据。
+
+```bash
+sudo systemctl stop research-collector.service &&
+tar --overwrite -zxf ~/Downloads/research-collector.tar.gz -C /opt/app &&
+bash /opt/app/research-collector/start.sh
+```
+
+## 验收
+
+```bash
+curl -fsS http://127.0.0.1:8000/health
+```
+
+看到 `"status":"ok"` 表示服务已启动。接着运行试采脚本。
+
+```bash
+bash /opt/app/research-collector/test-source.sh
+bash /opt/app/research-collector/test-source.sh 7
+bash /opt/app/research-collector/test-source.sh all
+```
+
+第一条列出来源供选择，第二条直接采集编号 7，第三条采集全部来源。每种方式都采集来源清单中昨天发布的全部文章，等待结束后打印报告和批次路径。
+
+打开脚本打印的 `data/runs/<run_id>.md` 查看采集任务完成表。表头显示目标日期、执行时间和日期核对结果，下面是来源汇总和逐篇明细。同名 JSON 保留供程序读取。发布日期无法确认时记为失败，日期不符时跳过。启动失败看 `sudo journalctl -u research-collector.service -n 50 --no-pager`。
+
+默认每天北京时间 01:00 采集昨天发布的文章，保留最近 7 个执行日期的数据。升级后的第一轮采集（包括手动试采）会清空 A 的旧历史缓存和旧批次。

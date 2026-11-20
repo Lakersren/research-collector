@@ -1,0 +1,631 @@
+openapi: 3.1.0
+info:
+  title: Overseas Corpus Read API
+  version: 1.0.0
+  description: 已实现的只读接口契约。只读服务基于现有四表；不包含采集管理和 MCP 传输路由。行为细节见 api-mcp-contract.md。
+security:
+- CorpusReadBearer: []
+paths:
+  /v1/sources:
+    get:
+      operationId: list_sources
+      summary: 查询配置中的全部来源及入库统计
+      tags:
+      - Corpus read API
+      parameters: []
+      responses:
+        '200':
+          description: 成功。
+          headers:
+            X-Request-ID:
+              description: 本次调用的 UUID，与响应体一致。
+              schema:
+                type: string
+                format: uuid
+            Cache-Control:
+              description: 读取结果及签名图片地址不进入共享缓存。
+              schema:
+                type: string
+                const: private, no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourcesResponse'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '422':
+          $ref: '#/components/responses/Error422'
+        '500':
+          $ref: '#/components/responses/Error500'
+        '503':
+          $ref: '#/components/responses/Error503'
+  /v1/articles:
+    get:
+      operationId: search_articles
+      summary: 按标题关键词、来源、时间和正文状态筛选文章
+      tags:
+      - Corpus read API
+      parameters:
+      - name: q
+        in: query
+        required: false
+        schema:
+          type: string
+          description: 仅在标题中做不区分大小写的字面量包含匹配；去除首尾空白后不能为空。
+          minLength: 1
+          maxLength: 200
+        description: 仅在标题中做不区分大小写的字面量包含匹配；去除首尾空白后不能为空。
+      - name: source_id
+        in: query
+        required: false
+        schema:
+          type: array
+          items:
+            type: string
+            description: 大小写敏感的稳定标识，按原值传递。
+            minLength: 1
+            maxLength: 191
+          minItems: 1
+          maxItems: 29
+          uniqueItems: true
+          description: 完整来源 ID；多个来源为 OR。REST 用重复查询参数传递。
+        description: 完整来源 ID；多个来源为 OR。REST 用重复查询参数传递。
+        style: form
+        explode: true
+      - name: content_state
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - ready
+          - preview
+          - no_text
+      - name: published_from
+        in: query
+        required: false
+        schema:
+          type: string
+          description: 带时区的 RFC 3339 时间，响应统一 UTC，以 Z 结尾。
+          format: date-time
+        description: 带时区的 RFC 3339 时间，响应统一 UTC，以 Z 结尾。
+      - name: published_to
+        in: query
+        required: false
+        schema:
+          type: string
+          description: 带时区的 RFC 3339 时间，响应统一 UTC，以 Z 结尾。
+          format: date-time
+        description: 带时区的 RFC 3339 时间，响应统一 UTC，以 Z 结尾。
+      - name: ingested_from
+        in: query
+        required: false
+        schema:
+          type: string
+          description: 带时区的 RFC 3339 时间，响应统一 UTC，以 Z 结尾。
+          format: date-time
+        description: 带时区的 RFC 3339 时间，响应统一 UTC，以 Z 结尾。
+      - name: ingested_to
+        in: query
+        required: false
+        schema:
+          type: string
+          description: 带时区的 RFC 3339 时间，响应统一 UTC，以 Z 结尾。
+          format: date-time
+        description: 带时区的 RFC 3339 时间，响应统一 UTC，以 Z 结尾。
+      - name: sort
+        in: query
+        required: false
+        schema:
+          type: string
+          description: 倒序排列；published_at 为空的文章排在有日期文章之后。
+          enum:
+          - published_at
+          - ingested_at
+          default: published_at
+        description: 倒序排列；published_at 为空的文章排在有日期文章之后。
+      - name: page_size
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: string
+          description: 前一页返回的游标；其他查询条件须保持一致，游标最长有效 24 小时。
+          minLength: 1
+          maxLength: 2048
+        description: 前一页返回的游标；其他查询条件须保持一致，游标最长有效 24 小时。
+      responses:
+        '200':
+          description: 成功。
+          headers:
+            X-Request-ID:
+              description: 本次调用的 UUID，与响应体一致。
+              schema:
+                type: string
+                format: uuid
+            Cache-Control:
+              description: 读取结果及签名图片地址不进入共享缓存。
+              schema:
+                type: string
+                const: private, no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArticlesResponse'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '422':
+          $ref: '#/components/responses/Error422'
+        '500':
+          $ref: '#/components/responses/Error500'
+        '503':
+          $ref: '#/components/responses/Error503'
+  /v1/articles/{id}:
+    get:
+      operationId: get_article
+      summary: 读取单篇完整正文及配图信息
+      tags:
+      - Corpus read API
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          description: 大小写敏感的稳定标识，按原值传递。
+          minLength: 1
+          maxLength: 191
+        description: 大小写敏感的稳定标识，按原值传递。
+      responses:
+        '200':
+          description: 成功。
+          headers:
+            X-Request-ID:
+              description: 本次调用的 UUID，与响应体一致。
+              schema:
+                type: string
+                format: uuid
+            Cache-Control:
+              description: 读取结果及签名图片地址不进入共享缓存。
+              schema:
+                type: string
+                const: private, no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArticleResponse'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '422':
+          $ref: '#/components/responses/Error422'
+        '500':
+          $ref: '#/components/responses/Error500'
+        '503':
+          $ref: '#/components/responses/Error503'
+        '404':
+          $ref: '#/components/responses/Error404'
+  /v1/articles/{id}/images:
+    get:
+      operationId: get_article_images
+      summary: 读取配图列表或刷新临时访问地址
+      tags:
+      - Corpus read API
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          description: 大小写敏感的稳定标识，按原值传递。
+          minLength: 1
+          maxLength: 191
+        description: 大小写敏感的稳定标识，按原值传递。
+      responses:
+        '200':
+          description: 成功。
+          headers:
+            X-Request-ID:
+              description: 本次调用的 UUID，与响应体一致。
+              schema:
+                type: string
+                format: uuid
+            Cache-Control:
+              description: 读取结果及签名图片地址不进入共享缓存。
+              schema:
+                type: string
+                const: private, no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImagesResponse'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '422':
+          $ref: '#/components/responses/Error422'
+        '500':
+          $ref: '#/components/responses/Error500'
+        '503':
+          $ref: '#/components/responses/Error503'
+        '404':
+          $ref: '#/components/responses/Error404'
+components:
+  securitySchemes:
+    CorpusReadBearer:
+      type: http
+      scheme: bearer
+      description: 由 IT 签发的语料读取凭证，不能据此调用采集管理接口。
+  schemas:
+    Source:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          description: 大小写敏感的稳定标识，按原值传递。
+          minLength: 1
+          maxLength: 191
+        name:
+          type: string
+        channel:
+          type: string
+          enum:
+          - web
+        n_docs:
+          type: integer
+          minimum: 0
+        first_ts:
+          anyOf:
+          - &id001
+            type: string
+            description: 带时区的 RFC 3339 时间，响应统一 UTC，以 Z 结尾。
+            format: date-time
+          - type: 'null'
+        last_ts:
+          anyOf:
+          - *id001
+          - type: 'null'
+      required:
+      - id
+      - name
+      - channel
+      - n_docs
+      - first_ts
+      - last_ts
+    ArticleSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          description: 大小写敏感的稳定标识，按原值传递。
+          minLength: 1
+          maxLength: 191
+        source_id:
+          type: string
+          description: 大小写敏感的稳定标识，按原值传递。
+          minLength: 1
+          maxLength: 191
+        source_name:
+          type: string
+        title:
+          type: string
+        authors:
+          type: array
+          items:
+            type: string
+        published_at:
+          anyOf:
+          - type: string
+            description: 带时区的 RFC 3339 时间，响应统一 UTC，以 Z 结尾。
+            format: date-time
+          - type: 'null'
+        ingested_at:
+          type: string
+          description: 带时区的 RFC 3339 时间，响应统一 UTC，以 Z 结尾。
+          format: date-time
+        url:
+          type: string
+          description: 原文链接，不代表本站已取得全文。
+          format: uri
+        content_state:
+          type: string
+          enum:
+          - ready
+          - preview
+          - no_text
+        summary:
+          anyOf:
+          - type: string
+            description: 正文压缩连续空白后截取前 300 个 Unicode 字符，无正文时 null。
+            maxLength: 300
+          - type: 'null'
+      required:
+      - id
+      - source_id
+      - source_name
+      - title
+      - authors
+      - published_at
+      - ingested_at
+      - url
+      - content_state
+      - summary
+    ArticleImage:
+      type: object
+      additionalProperties: false
+      properties:
+        position:
+          type: integer
+          description: 从 1 开始，对应正文 [图N]。
+          minimum: 1
+        status:
+          type: string
+          enum:
+          - pending
+          - ok
+          - failed
+        width:
+          anyOf:
+          - type: integer
+            minimum: 0
+          - type: 'null'
+        height:
+          anyOf:
+          - type: integer
+            minimum: 0
+          - type: 'null'
+        url:
+          anyOf:
+          - type: string
+            description: 临时签名 GET 地址，仅 status=ok 时非空。
+            format: uri
+          - type: 'null'
+        expires_at:
+          anyOf:
+          - *id001
+          - type: 'null'
+      required:
+      - position
+      - status
+      - width
+      - height
+      - url
+      - expires_at
+    Article:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          description: 大小写敏感的稳定标识，按原值传递。
+          minLength: 1
+          maxLength: 191
+        source_id:
+          type: string
+          description: 大小写敏感的稳定标识，按原值传递。
+          minLength: 1
+          maxLength: 191
+        source_name:
+          type: string
+        title:
+          type: string
+        authors:
+          type: array
+          items:
+            type: string
+        published_at:
+          anyOf:
+          - type: string
+            description: 带时区的 RFC 3339 时间，响应统一 UTC，以 Z 结尾。
+            format: date-time
+          - type: 'null'
+        ingested_at:
+          type: string
+          description: 带时区的 RFC 3339 时间，响应统一 UTC，以 Z 结尾。
+          format: date-time
+        url:
+          type: string
+          description: 原文链接，不代表本站已取得全文。
+          format: uri
+        content_state:
+          type: string
+          enum:
+          - ready
+          - preview
+          - no_text
+        content:
+          anyOf:
+          - type: string
+            description: 完整纯文本正文或公开预览，保留 [图N]，不静默截断；no_text 时 null。
+          - type: 'null'
+        images:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArticleImage'
+      required:
+      - id
+      - source_id
+      - source_name
+      - title
+      - authors
+      - published_at
+      - ingested_at
+      - url
+      - content_state
+      - content
+      - images
+    Page:
+      type: object
+      additionalProperties: false
+      properties:
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+        has_more:
+          type: boolean
+      required:
+      - next_cursor
+      - has_more
+    SourcesResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/Source'
+          required:
+          - items
+        request_id:
+          type: string
+          format: uuid
+      required:
+      - data
+      - request_id
+    ArticlesResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          properties:
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ArticleSummary'
+            page:
+              $ref: '#/components/schemas/Page'
+          required:
+          - items
+          - page
+        request_id:
+          type: string
+          format: uuid
+      required:
+      - data
+      - request_id
+    ArticleResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        data:
+          $ref: '#/components/schemas/Article'
+        request_id:
+          type: string
+          format: uuid
+      required:
+      - data
+      - request_id
+    ImagesResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        data:
+          type: object
+          additionalProperties: false
+          properties:
+            article_id:
+              type: string
+              description: 大小写敏感的稳定标识，按原值传递。
+              minLength: 1
+              maxLength: 191
+            items:
+              type: array
+              items:
+                $ref: '#/components/schemas/ArticleImage'
+          required:
+          - article_id
+          - items
+        request_id:
+          type: string
+          format: uuid
+      required:
+      - data
+      - request_id
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          properties:
+            code:
+              type: string
+              enum:
+              - UNAUTHORIZED
+              - FORBIDDEN
+              - NOT_FOUND
+              - INVALID_ARGUMENT
+              - INTERNAL_ERROR
+              - SERVICE_UNAVAILABLE
+            message:
+              type: string
+              description: 可读错误说明，不包含凭证、SQL 或堆栈。
+            request_id:
+              type: string
+              format: uuid
+          required:
+          - code
+          - message
+          - request_id
+      required:
+      - error
+  responses:
+    Error401:
+      description: 未提供有效的读取凭证。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Error403:
+      description: 凭证有效，但没有语料读取权限。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Error404:
+      description: 文章 ID 不存在。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Error422:
+      description: 参数无效、未知来源或游标无效。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Error500:
+      description: 服务内部异常。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Error503:
+      description: 必要的数据依赖不可用。
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

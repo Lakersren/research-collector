@@ -1,0 +1,300 @@
+# A-RIS 境外 web 源配置表（第二批：Substack + 实验室/媒体 RSS）
+#
+# 🔴 为什么用配置表而不是每站一个采集器
+# ------------------------------------------------------------------
+# 2026-08-24 实测：六个 Substack 站与 SemiAnalysis 的 Substack 侧**完全同构**
+# （`/api/v1/archive` + `/api/v1/posts/<slug>`，字段名逐一对齐），
+# 图片 URL 也都是同一套 `substackcdn.com/image/fetch/$s_!xx!,w_1456,…` 包装。
+# ⇒ 差异只有 host / 名字 / 起始日期。写六份采集器等于把同一个 bug 复制六遍。
+#
+# RSS 侧不同构（七个站七种 HTML），但 `trafilatura 2.0.0`（本机已装）实测
+# 7/7 能拿到正文 + 标题 + 作者 + 图片，零导航噪声 ⇒ 也不需要每站写解析器。
+#
+# 🔴 `since` 的意义：控制**回灌起点**，不是过滤器
+# ------------------------------------------------------------------
+# thezvi 1,217 篇最早到 2011-03、aisupremacy 1,004 篇最早 2021-06。
+# 全量回灌 3,229 篇正文 ≈ 22 分钟请求 + 数千张图，而 2022 年的 AI 评论
+# 对当下算力叙事的边际价值极低。
+# ⚠️ 但这**不是**丢数据：改 since 重跑 `--full` 就会把更早的补上（原始 JSON
+# 按 slug 一文件，天然幂等）。默认值按「这个站什么时候开始讲当下这轮算力」定，
+# 不是一刀切。
+
+substack:
+  # 判据：archive 全量翻页（offset 按实际返回条数累加，首页只回 23 条）
+  # audience: everyone=完整全文 / only_paid=预览或无正文
+  # 数字是 2026-08-24 15:10 实测全量，不是估计
+  - key: web:interconnects
+    name: Interconnects
+    host: https://www.interconnects.ai
+    since: '2024-01-01'
+    author_hint: Nathan Lambert
+    note: >-
+      369 篇（everyone 328 / only_paid 41），2020-06 起，含 86 篇 podcast。
+      偏免费，后训练/RLHF/开源模型评测第一手。img 1.4/篇。
+  - key: web:thechipletter
+    name: The Chip Letter
+    host: https://thechipletter.substack.com
+    since: '2024-01-01'
+    author_hint: Babbage
+    note: >-
+      199 篇（117/82），2022-08 起。半导体史与架构，图多（3.8/篇，最多 12）。
+  - key: web:importai
+    name: Import AI
+    host: https://importai.substack.com
+    since: '2024-01-01'
+    author_hint: Jack Clark
+    note: >-
+      152 篇，**全部 everyone**（零付费墙）。Anthropic 联创周报，
+      正文中位 16.8k 字符、零图 ⇒ 纯文本高密度，检索价值高、存储成本低。
+  - key: web:thezvi
+    name: Don't Worry About the Vase
+    host: https://thezvi.substack.com
+    since: '2025-01-01'
+    author_hint: Zvi Mowshowitz
+    note: >-
+      1,217 篇，**全部 everyone**，最早 2011-03。正文中位 46.6k 字符（六站最长）。
+      🔴 since 定在 2025 而非 2024：它是 AI 安全/政策评论为主，
+      与股票投研的相关性低于其他五站，先只收近一年看实际引用率再决定要不要往前扩。
+  - key: web:fabricatedknowledge
+    name: Fabricated Knowledge
+    host: https://www.fabricatedknowledge.com
+    since: '2024-01-01'
+    author_hint: Doug O'Laughlin
+    note: >-
+      288 篇（everyone 80 / only_paid 208），2019-11 起。半导体投资视角，
+      与正安的工作最贴近。免费篇正文可达 42.9k 字符。
+      🔴 **付费篇 `body_html` 直接缺失**（实测 `the-cost-of-time-and-ai-timelines`：
+      has_body_html=false、chars=0，而 wordcount=1205）⇒ 与 SemiAnalysis 不同，
+      它的付费篇不给预览。入库必须是 no_text，**不能标成 preview**
+      （preview 意味着「有一部分可读」，标错会让人以为能读）。
+  - key: web:aisupremacy
+    name: AI Supremacy
+    host: https://www.ai-supremacy.com
+    since: '2025-01-01'
+    author_hint: Michael Spencer
+    note: >-
+      1,004 篇（everyone 85 / only_paid 919），重付费。付费篇给短预览
+      （实测 2,523 字符 vs wordcount 1137）。
+      🔴 since 定 2025：付费率 92%，免费篇才 85 篇，回灌全量性价比最低。
+  - key: web:epochai
+    name: Epoch AI (Substack)
+    host: https://epochai.substack.com
+    since: '2024-12-01'
+    author_hint: Epoch AI
+    note: >-
+      139 篇，**audience 全部 everyone（零付费墙）**，最早 2024-12-06。
+      wordcount 中位 1,593、最大 15,018；正文实测 body_html 15,047 字符。
+      🔴 **它与官网不是彼此的超集，两边都要接**（标题归一化比对）：
+      139 篇里只有 51 篇能在官网 gradient-updates 找到；
+      substack 独有的多是 **Epoch Brief 摘要型（10 篇）** 与外部 restack。
+      ⇒ 只接这里会丢掉官网 publications 74 / data-insights 88 的全部深度内容；
+      只接官网会丢掉这 88 篇差集。官网侧走 `collectors/epoch_site.py`。
+      since 定 2024-12：就是它的开站时间，全量也就 139 篇，无需裁剪。
+
+rss:
+  # 判据：RSS 给清单（含权威 pubDate），正文用 trafilatura 抓文章页
+  # 🔴 `full_in_feed: true` 的站不必抓文章页 —— feed 里已有全文
+  - key: web:deepmind
+    name: Google DeepMind Blog
+    feed: https://deepmind.google/blog/rss.xml
+    full_in_feed: false
+    note: >-
+      100 条/次。feed 的 description 只有 81 字符（**不是全文**），
+      必须抓文章页；trafilatura 实测 9,785 字符、作者/日期齐全。
+  - key: web:googleresearch
+    name: Google Research Blog
+    feed: https://research.google/blog/rss/
+    full_in_feed: false
+    note: >-
+      100 条/次。feed description 仅 13 字符。trafilatura 8,925 字符。
+      🔴 **日期必须用 RSS 的 pubDate，不能用 trafilatura 抽的**：实测同一篇
+      trafilatura 给 2026-08-11、RSS 给 08-21、正文头写 August 21 ⇒ 它抽错了。
+  - key: web:nvidia_news
+    name: NVIDIA Blog
+    feed: https://nvidianews.nvidia.com/releases.xml
+    full_in_feed: false
+    note: 20 条/次（滚动窗口，历史拿不到）。trafilatura 3,197 字符。
+  - key: web:nvidia_dev
+    name: NVIDIA Technical Blog
+    feed: https://developer.nvidia.com/blog/feed/
+    full_in_feed: false
+    note: >-
+      100 条/次、739 KB。feed 的 <content> 只有 563 字符 ⇒ 仍需抓页面
+      （trafilatura 15,510 字符）。技术细节最密，判断算力效率叙事有用。
+  - key: web:stratechery
+    name: Stratechery
+    feed: https://stratechery.com/feed/
+    full_in_feed: true
+    ua: "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"  # 2026-09-11：WAF 封 Chrome UA（235 轮 403），Firefox UA 可通
+    note: >-
+      10 条/次，**`content:encoded` 含全文**（实测 4,363 字符）⇒ 零额外请求。
+      ⚠️ 免费 feed 只放 "This Week in Stratechery" 汇总与免费文，
+      付费日更不在里面 —— 别以为拿到了 Ben Thompson 全部内容。
+  - key: web:semiengineering
+    name: Semiconductor Engineering
+    feed: https://semiengineering.com/feed/
+    full_in_feed: true
+    note: >-
+      10 条/次，`content:encoded` **26,425 字符全文** ⇒ 零额外请求。
+      制造/封装/EDA 一手，2nm/先进封装叙事的技术底。
+  - key: web:anthropic
+    name: Anthropic News
+    feed: https://www.anthropic.com/news
+    kind: html_list
+    full_in_feed: false
+    note: >-
+      🔴 **不是 RSS** —— `/news` 是 HTML 列表页（探针按 RSS 解析得 items=0，
+      那是我的解析器不匹配，不是站点故障）。需要从页面里提链接再逐篇抓。
+      trafilatura 对文章页实测 13,496 字符 + 7 图。
+  - key: web:anthropic-research
+    name: Anthropic Research
+    feed: https://www.anthropic.com/research
+    kind: html_list
+    full_in_feed: false
+    note: >-
+      2026-10-18 新增。Anthropic 把「公告」和「研究」拆成两个独立频道，
+      `/news` 列表页只含公告、**完全不出现研究类文章**（实测 10 条全是公告）。
+      本轮补源前语料库漏了 `/research` 全部 12 条，包括正安点名的
+      employment-at-anthropic 与 ai-expectations-gap。
+      配套修复：`collectors/web_rss_sites.py` 的 `parse_html_list`
+      此前硬编码 `parts[0] != "news"`，已改为从 feed URL 第一段推 prefix。
+  - key: web:anthropic-engineering
+    name: Anthropic Engineering
+    feed: https://www.anthropic.com/engineering
+    kind: html_list
+    full_in_feed: false
+    note: >-
+      2026-10-18 新增。Anthropic 工程博客（agents / Claude Code / harness
+      设计类），26 条。同 anthropic-research，走 `parse_html_list` 的
+      prefix 推断逻辑。
+  - key: web:meta-engineering
+    name: Meta Engineering Blog
+    feed: https://engineering.fb.com/feed/
+    full_in_feed: false
+    note: >-
+      2026-10-18 新增。Meta 工程博客 RSS（替代被封的 ai.meta.com）。
+      `ai.meta.com` 是重 SPA + Meta 自家 WAF，带 Sec-Fetch 头能 200 拿到
+      列表页但 HTML 里零文章链接（全在 JS 运行时渲染），且无 RSS/sitemap。
+      engineering.fb.com 是 WordPress 标准 RSS，200 直通、无需特殊 header。
+      AI 浓度实测 5/9（GEM 广告模型 / AI 推理调度 / AI 眼镜隐私计算等）。
+  - key: web:meta-about
+    name: Meta News (about.fb.com)
+    feed: https://about.fb.com/news/feed/
+    full_in_feed: false
+    note: >-
+      2026-10-18 新增。Meta 官方新闻 RSS（同上，替代 ai.meta.com）。
+      覆盖产品发布/模型发布/AI 眼镜/政策声明。AI 浓度实测 4/10
+      （Muse Wonder 模型发布 / AI 眼镜等）。非 AI 条目靠下游筛选消化。
+
+  # ══════════════════════════════════════════════════════════════
+  # 第三批（2026-08-25）—— 补实验室与硬件层
+  # 判据一律是「它给的是新事实，还是同一事实的第 N 个副本」。
+  # 下面每个数字都是 2026-08-25 00:30 前后实测，不是估算。
+  # ══════════════════════════════════════════════════════════════
+  - key: web:openai
+    name: OpenAI News
+    feed: https://openai.com/news/rss.xml
+    full_in_feed: false
+    trailing_slash: true
+    browser_headers: true
+    note: >-
+      🥇 **1,143 条全量历史**（回溯到 2015-12）—— 与其他 RSS 站的滚动窗口
+      完全不同，一次抓全。实测 `<item>`/`</item>`/`pubDate` 三个计数均为 1143，
+      排除了正则多匹的可能。feed 的 description 仅 143~160 字符 ⇒ 必须抓页面。
+      🔴 **两个开关都不可删**，删任一个都是全量 403：
+        · `trailing_slash`：RSS 里 link 无尾斜杠，不补直接 403；
+        · `browser_headers`：它校 `Sec-Fetch-Dest/Mode/Site`，
+          二分实测证实与 UA 无关（换两种 UA 都 403，加 Sec-Fetch 就 200）。
+      补齐后 trafilatura 得 10,153 字符、date 正确。
+      现有实验室层有 DeepMind/Anthropic/GoogleResearch/NVIDIA，**唯独缺 OpenAI 本尊**。
+  - key: web:qwen
+    name: Qwen Blog
+    feed: https://qwenlm.github.io/blog/index.xml
+    full_in_feed: false
+    note: >-
+      44 条（Atom）。feed 的 description 仅 747 字符，文章页 trafilatura 实测
+      12,799 字符。国产模型一手口径，做中美能力对比时是唯一权威源。
+  - key: web:deepseek
+    name: DeepSeek News
+    feed: https://www.deepseek.com/news
+    kind: html_list
+    full_in_feed: false
+    note: >-
+      2026-10-18 新增。DeepSeek 新闻/模型发布频道。sitemap.xml 有 34 条
+      （中英双语各 17），列表页 `<a>` 标签抽到 8 条（首页 featured）。
+      文章页 trafilatura 实测 1,700~2,800 字符（中文），日期正确。
+      ⚠️ content-type 无 charset，requests 默认 ISO-8859-1 会乱码，
+      但采集器 `fetch_text` 用 `content.decode("utf-8")` 不受影响。
+      ⚠️ net_helper 白名单把 deepseek.com 误判为境外站，走 overseas_get。
+  - key: web:minimax
+    name: MiniMax Blog
+    feed: https://www.minimax.io/blog
+    kind: html_list
+    full_in_feed: false
+    note: >-
+      2026-10-18 新增。MiniMax 技术博客（模型发布/RL/推理优化）。
+      SSR 渲染，列表页 `<a>` 标签抽到 12 条。sitemap 只有列表页本身。
+      文章页 trafilatura 实测 11,000~23,600 字符（英文），日期正确。
+      ⚠️ net_helper 白名单把 minimax.io 误判为境外站，走 overseas_get。
+  - key: web:kimi
+    name: Kimi Blog (Moonshot)
+    feed: https://kimi.moonshot.cn/blog
+    kind: html_list
+    full_in_feed: false
+    note: >-
+      2026-10-18 新增。月之暗面 Kimi 技术博客（K2/K3 模型发布/agent 研究）。
+      列表页 `<a>` 标签抽到 6 条。sitemap 在 www.kimi.com 但不含 blog。
+      文章页 trafilatura 实测 7,000~17,500 字符（中英混合），日期正确。
+      ⚠️ kimi.moonshot.cn 可直连（cn_get），www.kimi.com 被白名单误判走 overseas。
+  - key: web:msresearch
+    name: Microsoft Research Blog
+    feed: https://www.microsoft.com/en-us/research/feed/
+    full_in_feed: true
+    note: >-
+      10 条，`content:encoded` **58,110 字符全文** ⇒ 零额外请求。
+      （已对比：文章页 trafilatura 只得 10,018 字符，feed 反而更全。）
+  - key: web:amd_ir
+    name: AMD Investor Relations
+    feed: https://ir.amd.com/rss/news-releases.xml
+    full_in_feed: false
+    note: >-
+      10 条（滚动窗口）。feed 的 description 只有 **12 字符**（几乎空）⇒ 必须抓页面，
+      trafilatura 实测 2,745 字符、date 正确。现有硬件层只有 NVIDIA，**缺 AMD**。
+      ⭕ 选 IR 而非企业博客：这里发的是业绩/产品发布的**法定口径**。
+  - key: web:servethehome
+    name: ServeTheHome
+    feed: https://www.servethehome.com/feed/
+    full_in_feed: false
+    note: >-
+      6 条（滚动窗口很短，不能停久）。description 454 字符，文章页 8,546 字符。
+      Hot Chips 级硬件实测（实例：d-Matrix Raptor 3D-DRAM 推理加速卡）——
+      计算效率叙事的硬件底，与 SemiEngineering（制造/封装）互补不重叠。
+  - key: web:damodaran
+    name: Musings on Markets (Damodaran)
+    feed: http://aswathdamodaran.blogspot.com/feeds/posts/default
+    full_in_feed: true
+    note: >-
+      23 条（Atom），`<content>` **90,975 字符全文** ⇒ 零额外请求。
+      估值方法论一手 —— 十二个境外源里唯一站在 **PM 视角**而非技术/媒体视角的。
+      ⚠️ http 而非 https：blogspot 的 feeds 端点实测这个形式可用，别“顺手修正”。
+
+# ══════════════════════════════════════════════════════════════════
+# standalone —— 非配置表驱动的采集器，仅在此登记以便图片下载器认识它们
+# 🔴 为什么必须登记（2026-08-25 实测）：
+#    `web_media_dl.py` 是配置表驱动的，只读 substack:/rss: 两段。
+#    epoch_site 走自己的清单机制，不属于任一段 ⇒ 首轮回灌后
+#    **721 处图锚点、本地 0 张**，而采集日志一切正常（226 篇 ready、零失败）。
+#    又一个静默失败：不看「我原本设计的那条路走通了吗」就发现不了。
+# ⚠️ 这里只需 key —— 采集参数在各自的采集器里，不在这。
+#    多写字段会被 web_media_dl 忽略（它不做未知字段校验），
+#    所以别把 feed/host 抄过来假装配置在这里生效。
+# ══════════════════════════════════════════════════════════════════
+standalone:
+  - key: web:epoch_site
+    name: Epoch AI (官网)
+    collector: collectors/epoch_site.py
+    host: https://epoch.ai
+    note: >-
+      清单来自列表页结构化 JSON（226 篇：publications 73 / data-insights 87 /
+      gradient-updates 66）。日期取清单，**不用 trafilatura**
+      —— 实测 147/222 篇它抽错，最狠的差 9,178 天（2022 年文章抽成 1996-12-04）。

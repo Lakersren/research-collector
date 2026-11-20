@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily research data sync at 06:00 Asia/Shanghai
+[Timer]
+OnCalendar=*-*-* 06:00:00 Asia/Shanghai
+Persistent=true
+Unit=research-data-sync.service
+[Install]
+WantedBy=timers.target

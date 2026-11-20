@@ -1,0 +1,181 @@
+{
+  "$defs": {
+    "Collection": {
+      "additionalProperties": false,
+      "properties": {
+        "started_at": {
+          "title": "Started At",
+          "type": "string"
+        },
+        "finished_at": {
+          "title": "Finished At",
+          "type": "string"
+        },
+        "n_discovered": {
+          "minimum": 0,
+          "title": "N Discovered",
+          "type": "integer"
+        },
+        "n_fetched": {
+          "minimum": 0,
+          "title": "N Fetched",
+          "type": "integer"
+        },
+        "n_failed": {
+          "minimum": 0,
+          "title": "N Failed",
+          "type": "integer"
+        },
+        "status": {
+          "enum": [
+            "success",
+            "failed"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "maxLength": 4000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        }
+      },
+      "required": [
+        "started_at",
+        "finished_at",
+        "n_discovered",
+        "n_fetched",
+        "n_failed",
+        "status"
+      ],
+      "title": "Collection",
+      "type": "object"
+    },
+    "RunSource": {
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "maxLength": 191,
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_name": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Source Name",
+          "type": "string"
+        },
+        "batch_id": {
+          "anyOf": [
+            {
+              "pattern": "^\\d{20}-[0-9a-f]{32}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Batch Id"
+        },
+        "collection": {
+          "$ref": "#/$defs/Collection"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_name",
+        "collection"
+      ],
+      "title": "RunSource",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1,
+      "default": 1,
+      "title": "Version",
+      "type": "integer"
+    },
+    "id": {
+      "pattern": "^\\d{20}-[0-9a-f]{32}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "job_id": {
+      "pattern": "^[0-9a-f-]{36}$",
+      "title": "Job Id",
+      "type": "string"
+    },
+    "target_date": {
+      "title": "Target Date",
+      "type": "string"
+    },
+    "execution_date": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Execution Date"
+    },
+    "timezone": {
+      "const": "Asia/Shanghai",
+      "default": "Asia/Shanghai",
+      "title": "Timezone",
+      "type": "string"
+    },
+    "started_at": {
+      "title": "Started At",
+      "type": "string"
+    },
+    "finished_at": {
+      "title": "Finished At",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "success",
+        "failed",
+        "interrupted"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/RunSource"
+      },
+      "maxItems": 100,
+      "minItems": 1,
+      "title": "Sources",
+      "type": "array"
+    }
+  },
+  "required": [
+    "id",
+    "job_id",
+    "target_date",
+    "started_at",
+    "finished_at",
+    "status",
+    "sources"
+  ],
+  "title": "RunReport",
+  "type": "object"
+}

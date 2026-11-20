@@ -1,0 +1,3 @@
+# Combined development environment; deployment installs each project's requirements.
+-r research-collector/requirements.txt
+-r research-data-service/requirements.txt

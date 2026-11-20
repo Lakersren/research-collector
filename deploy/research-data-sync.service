@@ -1,0 +1,14 @@
+[Unit]
+Description=Pull research batches from A and import into internal storage (server B)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=corpus
+Group=corpus
+WorkingDirectory=/opt/research-data-platform/research-data-service
+EnvironmentFile=/opt/research-data-platform/research-data-service/etc/sync.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/research-data-platform/research-data-service/.venv/bin/python sync.py
+TimeoutStartSec=6h
+UMask=0077

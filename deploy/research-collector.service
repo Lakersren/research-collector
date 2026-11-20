@@ -1,0 +1,19 @@
+[Unit]
+Description=Research Collector and batch download service (server A)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+User=corpus
+Group=corpus
+WorkingDirectory=/opt/research-data-platform/research-collector
+EnvironmentFile=/opt/research-data-platform/research-collector/etc/collector.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/research-data-platform/research-collector/.venv/bin/python service.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=40
+KillMode=control-group
+UMask=0077
+[Install]
+WantedBy=multi-user.target
