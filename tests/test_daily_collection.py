@@ -1,5 +1,7 @@
 """Calendar boundaries, source filtering, bounded cleanup and terminal report recovery."""
 from datetime import date,datetime,timezone
+import gzip
+from io import BytesIO
 import json
 import subprocess
 import threading
@@ -93,6 +95,62 @@ class DailyTests(unittest.TestCase):
         self.assertFalse(matches('2026-11-17T15:59:59Z'))
         self.assertFalse(matches(None));self.assertFalse(matches('garbage'))
         self.assertEqual(yesterday(datetime(2026,11,18,17,tzinfo=timezone.utc)),'2026-11-18')
+
+    def test_feed_decompresses_gzip_with_or_without_header(self):
+        feed = b'<rss><channel><item><title>Article</title></item></channel></rss>'
+        for headers in ({}, {'Content-Encoding': 'gzip'}):
+            with self.subTest(headers=headers):
+                response = BytesIO(gzip.compress(feed))
+                response.headers = headers
+                with patch.object(rss, 'overseas_urlopen', return_value=response):
+                    self.assertEqual(rss.parse_feed(rss.fetch_text('https://example.test/feed'))[0]['title'],
+                                     'Article')
+
+    def test_anthropic_channels_use_their_own_article_links(self):
+        sites = {site['key']: site for site in rss.load_cfg()}
+        samples = {
+            'web:anthropic': (
+                '<main><a href="/news/policy/">Policy</a>'
+                '<a href="/news/anthropic-prices-initial-public-offering">Anthropic prices initial public offering</a>'
+                '</main>',
+                'https://www.anthropic.com/news/anthropic-prices-initial-public-offering',
+            ),
+            'web:anthropic-engineering': (
+                '<main><article><h3><a href="/research/components-of-agent-memory">'
+                'The components of agent memory</a></h3></article>'
+                '<a href="/research/team/alignment">Alignment</a></main>',
+                'https://www.anthropic.com/research/components-of-agent-memory',
+            ),
+        }
+        extracted = dict(md='body', meta_title=None, meta_author=None,
+                         meta_date='2026-11-18T00:00:00Z', meta_sitename=None)
+        for key, (listing, article_url) in samples.items():
+            with (
+                self.subTest(key=key),
+                patch.object(rss, 'fetch_text', side_effect=[listing, '<html></html>']) as fetch,
+                patch.object(rss, 'extract_article', return_value=extracted),
+                patch.object(rss.time, 'sleep'),
+            ):
+                result = rss.collect_site(sites[key], redo=False, limit_items=None)
+            self.assertEqual((result['n_index'], result['n_fetched'], result['n_failed']), (1, 1, 0))
+            self.assertEqual([call.args[0] for call in fetch.call_args_list], [sites[key]['feed'], article_url])
+
+    def test_kimi_card_dates_filter_before_fetching_article_pages(self):
+        def card(slug, title, published):
+            return (f'<div class="menu-card"><a href="/en/blog/{slug}"></a>'
+                    f'<div class="card-body"><h4 class="card-title">{title}</h4>'
+                    f'<p class="card-date">{published}</p></div></div>')
+
+        current = card('current', 'Current article', '2026-11-18')
+        listing = '<main>' + card('older', 'Older article', '2026-11-17') + current * 2 + '</main>'
+        config = dict(key='web:kimi', name='Kimi Blog', feed='https://www.kimi.com/blog/', kind='html_list')
+        extracted = dict(md='body', meta_title=None, meta_author=None, meta_date=None, meta_sitename=None)
+        with patch.object(rss, 'fetch_text', side_effect=[listing, '<html></html>']) as fetch, \
+             patch.object(rss, 'extract_article', return_value=extracted), patch.object(rss.time, 'sleep'):
+            result = rss.collect_site(config, redo=False, limit_items=None)
+        self.assertEqual((result['n_index'], result['n_fetched'], result['n_failed']), (2, 1, 0))
+        self.assertEqual([call.args[0] for call in fetch.call_args_list],
+                         [config['feed'], 'https://www.kimi.com/en/blog/current'])
     def test_substack_fetches_only_yesterday_even_with_full(self):
         posts=[dict(id=i,slug=str(i),post_date=f'2026-11-{day}T03:00:00Z') for i,day in enumerate((17,18,19),1)]
         with patch.object(sub,'archive',return_value=posts),patch.object(sub,'post',return_value=dict(body_html='text')) as fetch,patch.object(sub.time,'sleep'):

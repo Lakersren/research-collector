@@ -163,10 +163,7 @@ rss:
     feed: https://www.anthropic.com/engineering
     kind: html_list
     full_in_feed: false
-    note: >-
-      2026-10-18 新增。Anthropic 工程博客（agents / Claude Code / harness
-      设计类），26 条。同 anthropic-research，走 `parse_html_list` 的
-      prefix 推断逻辑。
+    note: 工程频道的文章链接位于 /research/，候选文章从工程频道列表提取。
   - key: web:meta-engineering
     name: Meta Engineering Blog
     feed: https://engineering.fb.com/feed/
@@ -238,14 +235,10 @@ rss:
       ⚠️ net_helper 白名单把 minimax.io 误判为境外站，走 overseas_get。
   - key: web:kimi
     name: Kimi Blog (Moonshot)
-    feed: https://kimi.moonshot.cn/blog
+    feed: https://www.kimi.com/blog/
     kind: html_list
     full_in_feed: false
-    note: >-
-      2026-10-18 新增。月之暗面 Kimi 技术博客（K2/K3 模型发布/agent 研究）。
-      列表页 `<a>` 标签抽到 6 条。sitemap 在 www.kimi.com 但不含 blog。
-      文章页 trafilatura 实测 7,000~17,500 字符（中英混合），日期正确。
-      ⚠️ kimi.moonshot.cn 可直连（cn_get），www.kimi.com 被白名单误判走 overseas。
+    note: 旧域名跳转到当前列表页，按卡片读取文章链接、标题和发布日期。
   - key: web:msresearch
     name: Microsoft Research Blog
     feed: https://www.microsoft.com/en-us/research/feed/

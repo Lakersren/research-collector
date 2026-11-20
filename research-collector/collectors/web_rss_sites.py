@@ -5,20 +5,20 @@ from __future__ import annotations
 import os
 import argparse
 import fcntl
+import gzip
 import hashlib
 import json
 import re
 import sys
 import time
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
+from datetime import datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urljoin, urlsplit
 from urllib.request import Request
+from zlib import error as ZlibError
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "lib"))
+sys.path[:0] = [str(ROOT / "lib"), str(ROOT)]
 
 # ⚠️ 必须在 sys.path.insert 之后（从别的 cwd 跑会 ModuleNotFoundError，实测踩过）
 from aris.net_route import RouteConfigError, overseas_urlopen  # noqa: E402
@@ -26,15 +26,23 @@ from aris.daily_policy import candidate, matches, publication_day
 from aris.article_audit import date_rejection, page_publication_date, record
 from aris.paths import CONFIG, SOURCE_STATE as STATE  # noqa: E402
 from aris import web_media as wm  # noqa: E402
+from collectors.sites import anthropic, kimi
+from collectors.web_entries import HTML_TAG as _TAG, parse_date, parse_html_list, plain_html
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 RETRY_BASE = 1.5
 
+_HTML_LIST_PARSERS = {
+    "web:anthropic": anthropic.parse_news,
+    "web:anthropic-engineering": anthropic.parse_engineering,
+    "web:kimi": kimi.parse_blog,
+}
+
 # 配置表允许的字段（未知字段一律报错，见 load_cfg）
 _KNOWN_RSS_KEYS = {
     "key", "name", "feed", "full_in_feed", "kind", "note",
-    "list_path_prefix", "trailing_slash", "browser_headers", "ua",
+    "list_path_prefix", "list_exclude_paths", "trailing_slash", "browser_headers", "ua",
 }
 
 # 🔴 `browser_headers: true` 的由来（2026-08-25 二分定位）
@@ -188,7 +196,15 @@ def fetch(url: str, *, timeout: float = 60, retries: int = 4,
         req = Request(url, headers=hd)
         try:
             with overseas_urlopen(req, timeout=timeout) as r:
-                return r.read()
+                body = r.read()
+                encoding = r.headers.get("Content-Encoding", "").strip().lower()
+                # Some RSS responses contain gzip bytes without a Content-Encoding header.
+                if encoding == "gzip" or body.startswith(b"\x1f\x8b"):
+                    try:
+                        return gzip.decompress(body)
+                    except (OSError, EOFError, ZlibError) as exc:
+                        raise FetchError(f"gzip 解压失败 {url}: {exc}") from exc
+                return body
         except HTTPError as e:
             last = f"HTTP {e.code}"
             last_code = e.code
@@ -199,7 +215,9 @@ def fetch(url: str, *, timeout: float = 60, retries: int = 4,
                 time.sleep(min(wait, 60))
                 continue
             if 400 <= e.code < 500:
-                raise FetchError(f"{last} {url}",
+                final_url = e.geturl()
+                address = f"{url} → {final_url}" if final_url and final_url != url else url
+                raise FetchError(f"{last} {address}",
                                  permanent=e.code in _PERMANENT_HTTP,
                                  code=e.code) from e
         except RouteConfigError:
@@ -217,14 +235,6 @@ def fetch_text(url: str, **kw) -> str:
 
 
 # ---------------------------------------------------------------- feed 解析
-_TAG = re.compile(r"<[^>]+>")
-
-
-def _plain(h: str | None) -> str:
-    import html as _html
-    return re.sub(r"\s+", " ", _html.unescape(_TAG.sub(" ", h or ""))).strip()
-
-
 def _inner(seg: str, tag: str) -> str | None:
     m = re.search(rf"<{tag}(?:\s[^>]*)?>(.*?)</{tag}>", seg, re.S | re.I)
     if not m:
@@ -232,31 +242,6 @@ def _inner(seg: str, tag: str) -> str | None:
     v = m.group(1).strip()
     c = re.match(r"^<!\[CDATA\[(.*)\]\]>$", v, re.S)
     return c.group(1) if c else v
-
-
-def parse_date(s: str | None) -> tuple[str, int]:
-    """RFC-822（RSS）或 ISO-8601（Atom）→ (本地 'YYYY-MM-DDTHH:MM:SS+08:00', epoch)。
-
-    🔴 统一转成**带时区的 ISO**，与 Substack 的 `post_date` 同格式 ——
-    下游 `ts_from_utc_iso` 才能一视同仁。不转会让 RSS 源的时间口径
-    与 Substack 源不一致（同一张列表里混排就会错 8 小时）。
-    """
-    txt = (s or "").strip()
-    if not txt:
-        return "", 0
-    d = None
-    try:
-        d = parsedate_to_datetime(txt)
-    except Exception:
-        try:
-            d = datetime.fromisoformat(txt.replace("Z", "+00:00"))
-        except Exception:
-            return "", 0
-    if d is None:
-        return "", 0
-    if d.tzinfo is None:
-        d = d.replace(tzinfo=timezone.utc)
-    return d.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"), int(d.timestamp())
 
 
 def _unescape_if_escaped_html(v: str | None) -> str | None:
@@ -296,7 +281,7 @@ def parse_feed(txt: str) -> list[dict]:
         kind = "atom"
     out = []
     for seg in items:
-        title = _plain(_inner(seg, "title"))
+        title = plain_html(_inner(seg, "title"))
         if kind == "rss":
             link = (_inner(seg, "link") or "").strip()
             date = _inner(seg, "pubDate") or _inner(seg, "dc:date")
@@ -311,8 +296,8 @@ def parse_feed(txt: str) -> list[dict]:
         body = _unescape_if_escaped_html(
             _inner(seg, "content:encoded") or _inner(seg, "content")
             or _inner(seg, "description"))
-        author = (_plain(_inner(seg, "dc:creator"))
-                  or _plain(_inner(seg, "author")) or None)
+        author = (plain_html(_inner(seg, "dc:creator"))
+                  or plain_html(_inner(seg, "author")) or None)
         guid = (_inner(seg, "guid") or _inner(seg, "id") or link or title)
         iso, epoch = parse_date(date)
         if not link and not title:
@@ -321,41 +306,6 @@ def parse_feed(txt: str) -> list[dict]:
                     "epoch": epoch, "author": author,
                     "body_html": body, "guid": (guid or "").strip()})
     return out
-
-
-def parse_html_list(txt: str, base: str) -> list[dict]:
-    """HTML 列表页 → 条目（Anthropic 系用）。
-
-    🔴 判据：链接路径形如 `<prefix>/<slug>` 且 slug 非空；prefix 从 feed URL
-    的第一段路径推出（`/news` → `news`，`/research` → `research`，
-    `/engineering` → `engineering`）。2026-10-18 之前这里写死 `news`，
-    导致 anthropic 的 /research 与 /engineering 两个频道加进 yaml 也抓不到。
-    不去猜日期 —— 列表页上的日期格式随时会变，且我们随后要抓文章页，
-    trafilatura 会给一个（记进 meta，主时间用抓取发现时间兜底）。
-    ⚠️ 这是本采集器里**唯一**没有权威 pubDate 的入口，
-    所以 `date_basis` 会标成 `page_meta`，让下游知道这条时间弱一档。
-    """
-    seen = {}
-    host = urlsplit(base).netloc
-    base_parts = [p for p in urlsplit(base).path.split("/") if p]
-    prefix = base_parts[0] if base_parts else "news"
-    for m in re.finditer(r'<a\b[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
-                         txt, re.S | re.I):
-        href, inner = m.group(1), m.group(2)
-        u = urljoin(base, href.strip())
-        sp = urlsplit(u)
-        if sp.netloc != host:
-            continue
-        parts = [p for p in sp.path.split("/") if p]
-        if len(parts) != 2 or parts[0] != prefix:
-            continue
-        title = _plain(inner)
-        if not title or len(title) < 4:
-            continue
-        if u not in seen or len(title) > len(seen[u]["title"]):
-            seen[u] = {"title": title, "link": u, "date": "", "epoch": 0,
-                       "author": None, "body_html": None, "guid": u}
-    return list(seen.values())
 
 
 def item_id(guid: str) -> str:
@@ -596,15 +546,25 @@ def collect_site(cfg: dict, *, redo: bool, limit_items: int | None,
     try:
         # 🔴 feed 请求也要传 browser_headers + ua —— 08-25 只给文章页加了，
         #    而 Stratechery 的 WAF 拦的是 feed 本身（09-11 连续 235 轮 403，封 Chrome UA）。
-        txt = fetch_text(feed_url,
-                         browser_headers=bool(cfg.get("browser_headers")),
-                         ua=cfg.get("ua"))
-        items = (parse_html_list(txt, feed_url) if is_html_list
-                 else parse_feed(txt))
+        entry_kind = "HTML 列表页" if is_html_list else "订阅源"
+        try:
+            txt = fetch_text(feed_url,
+                             browser_headers=bool(cfg.get("browser_headers")),
+                             ua=cfg.get("ua"))
+        except FetchError as exc:
+            raise FetchError(f"{entry_kind}请求失败：{exc}", code=exc.code) from exc
+        parser = _HTML_LIST_PARSERS.get(key)
+        if is_html_list and parser:
+            items = parser(txt, feed_url)
+        elif is_html_list:
+            items = parse_html_list(txt, feed_url, path_prefix=cfg.get("list_path_prefix"),
+                                    exclude_paths=cfg.get("list_exclude_paths", ()))
+        else:
+            items = parse_feed(txt)
         # 🔴 零条目当失败而不是「没新内容」：feed 改版/被 WAF 挡都长这样，
         #    静默当成 0 新增会让一个源无声无息地死掉几个月。
         if not items:
-            raise FetchError(f"{name}: feed 解析到 0 条（改版？WAF？）"
+            raise FetchError(f"{name}: {entry_kind}解析到 0 条"
                              f" bytes={len(txt)}")
         for it in items:
             it["iid"] = item_id(it["guid"])
@@ -641,9 +601,11 @@ def collect_site(cfg: dict, *, redo: bool, limit_items: int | None,
                 "title": it["title"], "url": it["link"],
                 "date": it["date"], "guid": it["guid"],
                 "author": it.get("author"),
-                "date_basis": "feed_pubdate" if it["date"] else "page_meta",
+                "date_basis": "page_meta",
                 "_aris": {"fetched_at": datetime.now().astimezone().isoformat()},
             }
+            if it["date"]:
+                rec["date_basis"] = "site_index" if is_html_list else "feed_pubdate"
             try:
                 if full_in_feed and it.get("body_html") and (
                     not os.getenv("CORPUS_TARGET_DATE") or publication_day(rec["date"]) is not None
@@ -670,8 +632,9 @@ def collect_site(cfg: dict, *, redo: bool, limit_items: int | None,
                         d, ep = parse_date(str(ext["meta_date"]))
                         rec["date"] = d or rec["date"]
             except (FetchError, OSError, ValueError) as e:
-                record("failed", it.get("title"), it.get("link"), rec.get("date"), str(e))
-                log(f"    ✗ {it['title'][:50]}: {e}")
+                reason = f"文章页请求失败：{e}" if isinstance(e, FetchError) else str(e)
+                record("failed", it.get("title"), it.get("link"), rec.get("date"), reason)
+                log(f"    ✗ {it['title'][:50]}: {reason}")
                 if getattr(e, "permanent", False):
                     if os.getenv("CORPUS_TARGET_DATE"):
                         fail += 1
