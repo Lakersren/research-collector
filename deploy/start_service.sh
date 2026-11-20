@@ -37,6 +37,15 @@ for unit in "${units[@]}"; do
     exit 1
   fi
 done
+if [[ "$role" == collector ]]; then
+  working_dir="$(systemctl show "$service" --property=WorkingDirectory --value)"
+  if [[ -z "$working_dir" || ! -d "$working_dir" ]] ||
+     [[ "$(cd "$working_dir" && pwd -P)" != "$(pwd -P)" ]]; then
+    echo "采集服务的工作目录为 ${working_dir:-未设置}，当前脚本位于 ${PWD}。" >&2
+    echo '请在采集服务的部署目录更新代码，再执行 bash start.sh。' >&2
+    exit 1
+  fi
+fi
 if [[ "$role" == data ]] && systemctl is-active --quiet research-data-sync.service; then
   echo '同步任务正在运行，请任务完成后再执行。' >&2
   exit 1

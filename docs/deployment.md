@@ -16,6 +16,14 @@ bash start.sh
 
 ## 已安装，更新代码
 
+如果 A 使用 Git 部署，在 systemd 采集服务的部署目录中执行。
+
+```bash
+git pull --ff-only && bash start.sh
+```
+
+`start.sh` 会核对服务目录、安装依赖并重启采集服务。
+
 等当前采集结束，上传新包后执行以下命令。直接覆盖同名文件，保留旧项目目录里的配置和数据。
 
 ```bash
