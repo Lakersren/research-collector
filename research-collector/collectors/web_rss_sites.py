@@ -561,6 +561,8 @@ def collect_site(cfg: dict, *, redo: bool, limit_items: int | None,
                                     exclude_paths=cfg.get("list_exclude_paths", ()))
         else:
             items = parse_feed(txt)
+        if limit_items is not None:
+            items = items[:limit_items]
         # 🔴 零条目当失败而不是「没新内容」：feed 改版/被 WAF 挡都长这样，
         #    静默当成 0 新增会让一个源无声无息地死掉几个月。
         if not items:
@@ -586,8 +588,6 @@ def collect_site(cfg: dict, *, redo: bool, limit_items: int | None,
                 n_dead_skip += 1
                 continue
             todo.append(it)
-        if limit_items:
-            todo = todo[:limit_items]
         have = len(list((store.base / "items").glob("*.json")))
         log(f"  {name}: 待抓 {len(todo)} 条（本地已有 {have}"
             + (f"，跳过死链 {n_dead_skip}" if n_dead_skip else "") + "）")

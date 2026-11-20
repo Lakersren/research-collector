@@ -300,6 +300,8 @@ def collect(*, sections: list[str] | None, redo: bool, limit: int | None,
     xc = {}
     if not skip_crosscheck and not sections:
         xc = crosscheck_sitemap({it["url"] for it in index})
+    if limit is not None:
+        index = index[-limit:][::-1]
     wm.write_jsonl(store.base / "index.jsonl", index)
 
     todo = []
@@ -313,8 +315,6 @@ def collect(*, sections: list[str] | None, redo: bool, limit: int | None,
         if not os.getenv("CORPUS_TARGET_DATE") and not full and not redo and it["iid"] in seen:
             continue
         todo.append(it)
-    if limit:
-        todo = todo[:limit]
     have = len(list((store.base / "items").glob("*.json")))
     log(f"  待抓 {len(todo)} 条（本地已有 {have} / 清单 {len(index)}）")
 

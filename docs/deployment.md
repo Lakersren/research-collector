@@ -46,7 +46,7 @@ bash /opt/app/research-collector/test-source.sh 7
 bash /opt/app/research-collector/test-source.sh all
 ```
 
-第一条列出来源供选择，第二条直接采集编号 7，第三条采集全部来源。每种方式都采集来源清单中昨天发布的全部文章，等待结束后打印报告和日期归档路径。
+第一条列出来源供选择，第二条直接采集编号 7，第三条采集全部来源。每个来源只检查清单中的前 10 篇，保存北京时间昨天发布的文章。整轮结束后打印报告和日期归档路径。
 
 系统也可以用管理令牌调用 `POST /jobs/today`。传 `{"scope":"all"}` 采集全部来源，传 `{"scope":"source","source_id":"web:servethehome"}` 采集一个来源。接口返回 HTTP 202 和任务 ID，用 `GET /jobs/{job_id}` 查询进度。已有采集任务运行时返回 HTTP 409。来源 ID 可通过 `GET /sources` 获取。
 

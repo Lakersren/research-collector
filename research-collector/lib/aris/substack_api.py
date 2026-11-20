@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 import os
 from datetime import date
+from itertools import islice
 from aris.daily_policy import publication_day
 from urllib.parse import urlencode
 
@@ -19,7 +20,7 @@ class ArchiveError(RuntimeError):
 
 
 def archive(fetch_json, host: str, *, limit: int = 50, max_pages: int = 500,
-            delay: float = 0.3, log=print) -> list[dict]:
+            max_posts: int | None = None, delay: float = 0.3, log=print) -> list[dict]:
     if not 1 <= max_pages:
         raise ValueError("max_pages 必须 >= 1")
     out: dict[int, dict] = {}
@@ -65,6 +66,8 @@ def archive(fetch_json, host: str, *, limit: int = 50, max_pages: int = 500,
             if not isinstance(post, dict) or not post.get("id"):
                 raise ArchiveError("Substack archive 条目缺少数值/非空 id")
             out[post["id"]] = post
+        if max_posts is not None and len(out) >= max_posts:
+            break
         if len(out) == before:
             if mode == "cursor":
                 raise ArchiveError("Substack 游标页全部重复，拒绝写入不完整清单")
@@ -87,4 +90,5 @@ def archive(fetch_json, host: str, *, limit: int = 50, max_pages: int = 500,
     else:
         # 只有空页或 nextCursor=null 才代表完整到达末尾。
         raise ArchiveError(f"Substack 翻页超过 max_pages={max_pages}，清单可能不完整")
-    return sorted(out.values(), key=lambda p: p.get("post_date") or "")
+    selected = islice(out.values(), max_posts) if max_posts is not None else out.values()
+    return sorted(selected, key=lambda p: p.get("post_date") or "")

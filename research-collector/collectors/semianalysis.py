@@ -210,11 +210,11 @@ def strip_cta(text: str, snippets) -> str:
 
 
 # ---------------------------------------------------------------- Substack
-def sub_archive(limit: int = 50, max_pages: int = 500) -> list[dict]:
+def sub_archive(limit: int = 50, max_pages: int = 500, *, max_posts: int | None = None) -> list[dict]:
     """完整 Substack 清单，兼容旧 offset 与新 nextCursor 协议。"""
     try:
         out = fetch_archive(fetch_json, SUB_HOST, limit=limit,
-                            max_pages=max_pages, log=log)
+                            max_pages=max_pages, max_posts=max_posts, log=log)
     except ArchiveError as e:
         raise FetchError(f"SemiAnalysis Substack: {e}") from e
     if not out:
@@ -227,10 +227,12 @@ def sub_post(slug: str) -> dict:
 
 
 # ---------------------------------------------------------------- WordPress
-def wp_index(per_page: int = 100, max_pages: int = 20) -> list[dict]:
+def wp_index(per_page: int = 100, max_pages: int = 20, *, max_posts: int | None = None) -> list[dict]:
     """全量清单（只要轻字段）。用 X-WP-Total 校验没漏页。"""
     out: dict[int, dict] = {}
     total = None
+    if max_posts is not None:
+        per_page = min(per_page, max_posts)
     for pg in range(1, max_pages + 1):
         url = (f"{WP_HOST}/wp-json/wp/v2/posts?per_page={per_page}&page={pg}"
                "&orderby=date&order=desc&_fields=id,date,date_gmt,modified_gmt,"
@@ -248,10 +250,13 @@ def wp_index(per_page: int = 100, max_pages: int = 20) -> list[dict]:
             break
         for p in d:
             out[p["id"]] = p
+        if max_posts is not None and len(out) >= max_posts:
+            break
         time.sleep(0.3)
     if not out:
         raise FetchError("SemiAnalysis WordPress 清单为空（API 变更或 WAF）")
-    if total and len(out) != total:
+    expected = min(total, max_posts) if total and max_posts is not None else total
+    if expected and len(out) != expected:
         # 清单不完整不能推进水位线，按整轮失败处理。
         raise FetchError(f"WP 清单条数不符：拿到 {len(out)}，X-WP-Total={total}")
     return sorted(out.values(), key=lambda p: p.get("date") or "")
@@ -289,7 +294,7 @@ def safe_slug(s: str) -> str:
 # ---------------------------------------------------------------- 采集主体
 def collect_substack(*, full: bool, redo: bool, limit_posts: int | None,
                      st: dict) -> dict:
-    idx = sub_archive()
+    idx = sub_archive(max_posts=limit_posts)
     write_index(BASE / "substack" / "index.jsonl", idx)
     log(f"  Substack 清单 {len(idx)} 篇")
 
@@ -304,8 +309,6 @@ def collect_substack(*, full: bool, redo: bool, limit_posts: int | None,
             todo.append(p)
         elif not full and (p.get("post_date") or "") > seen_hwm:
             todo.append(p)
-    if limit_posts:
-        todo = todo[-limit_posts:]
     log(f"  Substack 待抓 {len(todo)} 篇（已有 "
         f"{len(list((BASE / 'substack' / 'posts').glob('*.json')))} 篇）")
 
@@ -351,7 +354,7 @@ def collect_substack(*, full: bool, redo: bool, limit_posts: int | None,
 
 def collect_wp(*, full: bool, redo: bool, limit_posts: int | None,
                st: dict) -> dict:
-    idx = wp_index()
+    idx = wp_index(max_posts=limit_posts)
     write_index(BASE / "wp" / "index.jsonl", idx)
     log(f"  WordPress 清单 {len(idx)} 篇")
 
@@ -367,8 +370,6 @@ def collect_wp(*, full: bool, redo: bool, limit_posts: int | None,
             todo.append(p)
         elif not full and (p.get("date") or "") > seen_hwm:
             todo.append(p)
-    if limit_posts:
-        todo = todo[-limit_posts:]
     log(f"  WordPress 待抓 {len(todo)} 篇（已有 "
         f"{len(list((BASE / 'wp' / 'posts').glob('*.json')))} 篇）")
 

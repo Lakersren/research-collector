@@ -96,6 +96,67 @@ class DailyTests(unittest.TestCase):
         self.assertFalse(matches(None));self.assertFalse(matches('garbage'))
         self.assertEqual(yesterday(datetime(2026,11,18,17,tzinfo=timezone.utc)),'2026-11-18')
 
+    def test_rss_limit_applies_before_filtering_for_yesterday(self):
+        import run
+
+        feed = '<rss>' + ''.join(
+            f'<item><title>Article {i}</title><link>https://example.test/{i}</link>'
+            f'<pubDate>2026-11-{18 if i == 11 else 17}T00:00:00Z</pubDate></item>'
+            for i in range(1, 12)
+        ) + '</rss>'
+        source = dict(key='web:test', name='Test', feed='https://example.test/feed', _seg='rss')
+        from argparse import Namespace
+        with patch.object(rss, 'fetch_text', return_value=feed) as fetch:
+            result = run.collect(source, Namespace(limit=None, full=False, redo=False))
+        self.assertEqual((result['n_index'], result['n_fetched'], result['n_failed']), (10, 0, 0))
+        fetch.assert_called_once()
+
+    def test_substack_stops_pagination_when_the_candidate_window_is_full(self):
+        from aris.substack_api import archive
+        from unittest.mock import Mock
+
+        posts = [dict(id=i, post_date='2026-11-18T00:00:00Z') for i in range(1, 13)]
+        fetch = Mock(return_value={'posts': posts, 'nextCursor': 'page-two'})
+        self.assertEqual(archive(fetch, 'https://example.test', max_posts=10), posts[:10])
+        fetch.assert_called_once()
+
+    def test_sources_run_in_parallel_across_hosts_and_in_order_within_a_host(self):
+        from argparse import Namespace
+        from aris.archive_source import source_result, stamp
+        import run
+
+        sources = [
+            dict(key='web:first', name='First', feed='https://one.test/a'),
+            dict(key='web:second', name='Second', feed='https://www.one.test/b'),
+            dict(key='web:other', name='Other', host='https://two.test'),
+        ]
+        first_finished = threading.Event()
+        other_started = threading.Event()
+        work = self.root / 'staging'
+        work.mkdir()
+        args = Namespace(limit=None, staging=work, target_date='2026-11-18')
+
+        def process(source, options):
+            key = source['key'].split(':')[-1]
+            if key == 'first':
+                self.assertTrue(other_started.wait(3))
+                first_finished.set()
+            elif key == 'other':
+                other_started.set()
+            else:
+                self.assertTrue(first_finished.is_set())
+            options.result = source_result(source, key, stamp())
+
+        with (
+            patch.object(run, 'process', side_effect=process),
+            patch.object(run, 'publish_date') as publish,
+            patch.object(run, 'prune_dates'),
+        ):
+            self.assertEqual(run.collect_day(sources, args, str(uuid.uuid4()), work), 0)
+        report = publish.call_args.args[2]
+        self.assertEqual([item['source_id'] for item in report['sources']],
+                         [item['key'] for item in sources])
+
     def test_feed_decompresses_gzip_with_or_without_header(self):
         feed = b'<rss><channel><item><title>Article</title></item></channel></rss>'
         for headers in ({}, {'Content-Encoding': 'gzip'}):

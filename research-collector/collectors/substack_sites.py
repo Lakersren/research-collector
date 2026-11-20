@@ -169,7 +169,8 @@ def fetch_json(url: str, **kw):
     return json.loads(fetch(url, **kw).decode("utf-8", "replace"))
 
 
-def archive(host: str, *, limit: int = 50, max_pages: int = 500) -> list[dict]:
+def archive(host: str, *, limit: int = 50, max_pages: int = 500,
+            max_posts: int | None = None) -> list[dict]:
     """完整清单，兼容旧 offset 数组和新 {posts,nextCursor} 游标协议。
 
     旧协议的 offset 按实际返回条数累加；重复旧页可终止。新协议整页
@@ -177,7 +178,7 @@ def archive(host: str, *, limit: int = 50, max_pages: int = 500) -> list[dict]:
     """
     try:
         return fetch_archive(fetch_json, host, limit=limit,
-                             max_pages=max_pages, log=log)
+                             max_pages=max_pages, max_posts=max_posts, log=log)
     except ArchiveError as e:
         raise FetchError(f"{host}: {e}") from e
 
@@ -261,7 +262,7 @@ def collect_site(cfg: dict, *, full: bool, redo: bool,
     t0 = time.time()
     st = load_state(site)
     try:
-        idx = archive(host)
+        idx = archive(host, max_posts=limit_posts)
         if not idx:
             raise FetchError(f"{name}: archive 返回空清单（站点/API 变更或 WAF）")
         wm.write_jsonl(store.base / "index.jsonl", idx)
@@ -292,8 +293,6 @@ def collect_site(cfg: dict, *, full: bool, redo: bool,
             if since and not os.getenv("CORPUS_TARGET_DATE") and not full and pd[:10] < since:
                 continue
             todo.append(p)
-        if limit_posts:
-            todo = todo[-limit_posts:]
         have = len(list((store.base / "posts").glob("*.json")))
         log(f"  {name}: 待抓 {len(todo)} 篇（本地已有 {have}）")
 

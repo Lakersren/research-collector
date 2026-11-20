@@ -19,12 +19,17 @@ if __name__ == '__main__' and len(sys.argv)>1 and sys.argv[1] in ('collect','exp
     os.environ['ARIS_RAW_ROOT'] = str(workspace / 'raw')
     os.environ['ARIS_SOURCE_STATE_ROOT'] = str(workspace / 'state')
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
+from copy import copy
 import fcntl
 import logging
 import time
 import uuid
 import shutil
 from pathlib import Path
+from threading import Event
+from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'lib'))
 from aris.paths import DATA, STATE
 from aris.kb_adapters import sources
@@ -37,6 +42,8 @@ from aris.image_ingest import sync_images
 from aris.observability import log_context, setup_logging
 
 log = logging.getLogger('corpus.pipeline')
+MAX_SOURCE_ARTICLES = 10
+SOURCE_WORKERS = 3
 
 def select_sources(names):
     rows=sources()
@@ -50,22 +57,27 @@ def select_sources(names):
 
 
 def collect(source, args):
+    limit = min(args.limit or MAX_SOURCE_ARTICLES, MAX_SOURCE_ARTICLES)
     seg=source['_seg']
     if seg=='substack':
         from collectors.substack_sites import collect_site
-        return collect_site(source,full=args.full,redo=args.redo,limit_posts=args.limit)
+        return collect_site(source,full=args.full,redo=args.redo,limit_posts=limit)
     if seg=='rss':
         from collectors.web_rss_sites import collect_site
-        return collect_site(source,redo=args.redo,limit_items=args.limit,redo_dead=args.redo)
+        return collect_site(source,redo=args.redo,limit_items=limit,redo_dead=args.redo)
     if seg=='standalone':
         from collectors.epoch_site import collect as epoch_collect
-        return epoch_collect(sections=None,redo=args.redo,limit=args.limit,full=args.full)
+        return epoch_collect(sections=None,redo=args.redo,limit=limit,full=args.full,
+                             skip_crosscheck=not args.full)
     from collectors import semianalysis as semi
     st=semi.load_state()
     totals=dict(n_index=0,n_fetched=0,n_failed=0)
     for channel, func in [('substack',semi.collect_substack)]+([('wp',semi.collect_wp)] if args.full else []):
+        remaining = limit - totals['n_index']
+        if remaining <= 0:
+            break
         try:
-            result=func(full=args.full,redo=args.redo,limit_posts=args.limit,st=st)
+            result=func(full=args.full,redo=args.redo,limit_posts=remaining,st=st)
             for k in totals:
                 totals[k]+=result[k]
             if not result['n_failed']:
@@ -124,7 +136,7 @@ def main(argv=None):
     parser.add_argument('--source', action='append', help='来源 ID，可重复指定；默认全部 29 个')
     parser.add_argument('--full', action='store_true', help='扩大来源清单扫描范围（仍只保留昨天发布的文章）')
     parser.add_argument('--redo', action='store_true', help='重新获取已缓存文章')
-    parser.add_argument('--limit', type=int, help='每个来源本轮最多采集文章数')
+    parser.add_argument('--limit', type=int, help='每个来源的候选文章数，默认 10，最大 10')
     parser.add_argument('--job-id', default=None, help=argparse.SUPPRESS)
     parser.add_argument('--trigger', choices=['manual', 'api', 'schedule'], default='manual', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -176,40 +188,73 @@ def main(argv=None):
             return 1
 
 
-def collect_day(rows, args, job_id, work):
-    started_at = stamp()
-    results = []
-    interrupted = False
-    replace_all = args.limit is None and len(rows) == len(sources())
-    for index, source in enumerate(rows):
+def collect_host(entries, args, work, stopping):
+    results = {}
+    for index, source in entries:
+        if stopping.is_set():
+            break
+        source_args = copy(args)
         folder = source_directory(source['key'])
         source_started = stamp()
-        args.audit = work / f'audit-{index}.jsonl'
-        args.result = None
+        source_args.audit = work / f'audit-{index}.jsonl'
+        source_args.result = None
+        error = '来源执行失败，请查看采集日志'
         with log_context(source_id=source['key'], source_name=source['name']):
             try:
-                with capture(args.audit):
-                    process(source, args)
+                with capture(source_args.audit):
+                    process(source, source_args)
             except KeyboardInterrupt:
-                interrupted = True
+                stopping.set()
+                error = '任务中断'
             except Exception:
                 log.exception('source_execution_failed')
-            if args.result is None:
-                partial = args.staging / folder
+            if source_args.result is None:
+                partial = source_args.staging / folder
                 if partial.is_dir():
                     shutil.rmtree(partial)
-                message = '任务中断' if interrupted else '来源执行失败，请查看采集日志'
-                args.result = source_result(source, folder, source_started, errors=[message], audit=args.audit)
-            (args.staging / folder).mkdir(exist_ok=True)
-            results.append(args.result)
-        if interrupted:
-            break
-    for source in rows[len(results):]:
+                source_args.result = source_result(source, folder, source_started,
+                                                   errors=[error], audit=source_args.audit)
+            (source_args.staging / folder).mkdir(exist_ok=True)
+            results[index] = source_args.result
+    return results
+
+
+def collect_day(rows, args, job_id, work):
+    started_at = stamp()
+    replace_all = args.limit is None and len(rows) == len(sources())
+    by_host = {}
+    for index, source in enumerate(rows):
+        address = source.get('host') or source.get('feed') or ''
+        host = urlsplit(address).hostname or source['key']
+        by_host.setdefault(host.removeprefix('www.'), []).append((index, source))
+
+    stopping = Event()
+    completed = {}
+    with ThreadPoolExecutor(max_workers=SOURCE_WORKERS) as pool:
+        futures = []
+        try:
+            for entries in by_host.values():
+                futures.append(pool.submit(copy_context().run, collect_host, entries, args, work, stopping))
+            for future in as_completed(futures):
+                completed.update(future.result())
+        except KeyboardInterrupt:
+            stopping.set()
+            for future in futures:
+                future.cancel()
+            for future in futures:
+                if not future.cancelled():
+                    completed.update(future.result())
+
+    results = []
+    for index, source in enumerate(rows):
+        if index in completed:
+            results.append(completed[index])
+            continue
         folder = source_directory(source['key'])
-        (args.staging / folder).mkdir()
+        (args.staging / folder).mkdir(exist_ok=True)
         results.append(source_result(source, folder, stamp(), errors=['任务中断，来源未执行']))
     status = 'success'
-    if interrupted:
+    if stopping.is_set():
         status = 'interrupted'
     elif any(result['collection']['status'] == 'failed' for result in results):
         status = 'failed'
