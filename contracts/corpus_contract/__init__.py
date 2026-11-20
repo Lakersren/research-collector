@@ -139,6 +139,78 @@ class RunSource(Strict):
     batch_id:str|None=Field(default=None,pattern=r'^\d{20}-[0-9a-f]{32}$')
     collection:Collection
 
+class ArchivedImage(Image):
+    @model_validator(mode='after')
+    def validate_file(self):
+        if self.status == 'ok':
+            if not self.path or '/images/' not in safe_path(self.path):
+                raise ValueError('ok image requires an archive path')
+        elif self.path is not None:
+            raise ValueError('unavailable image must have null path')
+        return self
+
+
+class DailyArticle(Strict):
+    id: str = Field(min_length=1, max_length=191)
+    title: str = Field(min_length=1)
+    authors: list[str]
+    published_at: str
+    url: str = Field(pattern=r'^https?://')
+    content_state: Literal['ready', 'preview', 'no_text']
+    text_path: str | None
+    images: list[ArchivedImage]
+    _time = field_validator('published_at')(valid_time)
+
+    @model_validator(mode='after')
+    def validate_paths(self):
+        if (self.text_path is None) != (self.content_state == 'no_text'):
+            raise ValueError('text path does not match content state')
+        if self.text_path is not None and not safe_path(self.text_path).endswith('.txt'):
+            raise ValueError('invalid text path')
+        if len({image.position for image in self.images}) != len(self.images):
+            raise ValueError('duplicate image position')
+        return self
+
+
+class DailySource(Strict):
+    source_id: str = Field(min_length=1, max_length=191)
+    source_name: str = Field(min_length=1, max_length=255)
+    directory: str = Field(pattern=r'^[A-Za-z0-9_~-]{1,191}$')
+    collection: Collection
+    files: list[File] = Field(max_length=50000)
+    articles: list[DailyArticle]
+
+    @model_validator(mode='after')
+    def validate_files(self):
+        paths = {item.path for item in self.files}
+        referenced = set()
+        for article in self.articles:
+            if article.text_path:
+                referenced.add(article.text_path)
+            referenced.update(image.path for image in article.images if image.path)
+        if (len(paths) != len(self.files) or paths != referenced
+                or any(not path.startswith(self.directory + '/') for path in paths)):
+            raise ValueError('invalid or unreferenced archive files')
+        if sum(item.size for item in self.files) > MAX_BATCH_BYTES:
+            raise ValueError('archive source too large')
+        if len({article.id for article in self.articles}) != len(self.articles):
+            raise ValueError('duplicate article')
+        return self
+
+
+class DailyResult(Strict):
+    version: Literal[1] = 1
+    target_date: str
+    status: Literal['success', 'failed', 'interrupted']
+    sources: list[DailySource] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode='after')
+    def validate_sources(self):
+        if (len({source.source_id for source in self.sources}) != len(self.sources)
+                or len({source.directory for source in self.sources}) != len(self.sources)):
+            raise ValueError('duplicate source or directory')
+        return self
+
 class RunReport(Strict):
     version:Literal[1]=1
     id:str=Field(pattern=r'^\d{20}-[0-9a-f]{32}$')

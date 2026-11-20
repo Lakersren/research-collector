@@ -1,5 +1,5 @@
 [Unit]
-Description=Pull research batches from A and import into internal storage (server B)
+Description=Pull dated research archives from A and import into internal storage (server B)
 After=network-online.target
 Wants=network-online.target
 [Service]

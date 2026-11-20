@@ -5,34 +5,34 @@ import bootstrap
 import os
 import sys
 if __name__ == '__main__' and len(sys.argv)>1 and sys.argv[1] in ('collect','export','ingest'):
-    from datetime import datetime,timezone
     from pathlib import Path
-    import re
-    import uuid
+    from uuid import UUID, uuid4
     from aris.daily_policy import yesterday
-    run_id=os.environ.setdefault('CORPUS_RUN_ID',datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')+'-'+uuid.uuid4().hex)
-    if not re.fullmatch(r'\d{20}-[0-9a-f]{32}',run_id):
-        raise ValueError('无效的 CORPUS_RUN_ID')
-    os.environ.setdefault('CORPUS_TARGET_DATE',yesterday())
+    supplied_job_id = sys.argv[sys.argv.index('--job-id') + 1] if '--job-id' in sys.argv[:-1] else None
+    job_id = UUID(os.environ.setdefault('CORPUS_JOB_ID', supplied_job_id or str(uuid4())))
+    os.environ.setdefault('CORPUS_TARGET_DATE', yesterday())
     import signal
-    def terminated(signum,frame):raise KeyboardInterrupt('采集进程收到停止信号')
-    signal.signal(signal.SIGTERM,terminated)
-    workspace=Path(os.environ['ARIS_ROOT'])/'data/daily'/run_id
-    os.environ['ARIS_RAW_ROOT']=str(workspace/'raw')
-    os.environ['ARIS_SOURCE_STATE_ROOT']=str(workspace/'state')
+    def terminated(signum, frame):
+        raise KeyboardInterrupt('采集进程收到停止信号')
+    signal.signal(signal.SIGTERM, terminated)
+    workspace = Path(os.environ['ARIS_ROOT']) / 'data' / f'.work-{job_id}'
+    os.environ['ARIS_RAW_ROOT'] = str(workspace / 'raw')
+    os.environ['ARIS_SOURCE_STATE_ROOT'] = str(workspace / 'state')
 import argparse
 import fcntl
 import logging
-import sys
 import time
 import uuid
-from contextlib import nullcontext
+import shutil
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent / 'lib'))
-from aris.paths import STATE
+from aris.paths import DATA, STATE
 from aris.kb_adapters import sources
 from aris.local_images import LocalImages
-from aris.batches import publish, stamp, BATCHES
+from aris.article_audit import capture
+from aris.archive_source import export_source, source_result, stamp
+from aris.daily_archive import prune_dates, publish_date, source_directory
+from aris.daily_policy import publication_day, normalize_target_date, yesterday
 from aris.image_ingest import sync_images
 from aris.observability import log_context, setup_logging
 
@@ -111,16 +111,15 @@ def process(source, args, objects=None):
     with log_context(stage='extract'):
         result = extract(source)
         if result.get('n_dirty'): raise ValueError('正文存在未清理 HTML，拒绝发布')
-    with log_context(stage='publish'):
-        manifest = publish(source, counts, errors, started)
-        log.info('batch_published batch_id=%s files=%s status=%s',
-                 manifest.id, len(manifest.files), manifest.collection.status)
-    args.last_manifest = manifest
+    with log_context(stage='archive'):
+        folder = source_directory(source['key'])
+        saved, files = export_source(source, args.staging, folder, args.target_date)
+        args.result = source_result(source, folder, started, saved, files, counts, errors, args.audit)
     return not errors
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='外网文章采集、本地缓存与同步批次发布，不连接内部数据库')
+    parser = argparse.ArgumentParser(description='外网文章采集、按日归档，不连接内部数据库')
     parser.add_argument('command', choices=['collect', 'export', 'ingest', 'check', 'sources'])
     parser.add_argument('--source', action='append', help='来源 ID，可重复指定；默认全部 29 个')
     parser.add_argument('--full', action='store_true', help='扩大来源清单扫描范围（仍只保留昨天发布的文章）')
@@ -134,9 +133,8 @@ def main(argv=None):
     if args.limit is not None and args.limit < 1:
         parser.error('--limit 必须大于 0')
     setup_logging('pipeline')
-    job_id = args.job_id or str(uuid.uuid4())
+    job_id = str(uuid.UUID(args.job_id or os.environ.get('CORPUS_JOB_ID') or str(uuid.uuid4())))
     started = time.monotonic()
-    report = None
     with log_context(job_id=job_id, trigger=args.trigger):
         try:
             rows = select_sources(args.source)
@@ -153,46 +151,75 @@ def main(argv=None):
                     return 75
                 log.info('pipeline_started command=%s sources=%s', args.command,
                          [s.get('key', s['name']) for s in rows])
+                DATA.mkdir(parents=True, exist_ok=True)
                 if args.command == 'check':
-                    BATCHES.mkdir(parents=True, exist_ok=True)
-                    probe=BATCHES/'.write-check';probe.write_text('ok');probe.unlink()
-                    log.info('local_config_check_passed sources=%s',len(rows))
+                    from tempfile import TemporaryFile
+                    with TemporaryFile(dir=DATA):
+                        pass
+                    log.info('local_config_check_passed sources=%s', len(rows))
                     return 0
-                if os.getenv('CORPUS_RUN_ID'):
-                    from aris.daily_runs import begin,cleanup
-                    from aris.paths import DATA
-                    report=begin(job_id,rows,DATA,run_id=os.environ['CORPUS_RUN_ID'],target_date=os.environ['CORPUS_TARGET_DATE'])
-                    cleanup(DATA,STATE)
-                good = True
-                for source_index, source in enumerate(rows):
-                    with log_context(source_id=source['key'], source_name=source['name']):
-                        source_started=stamp()
-                        args.last_manifest=None
-                        try:
-                            audit = nullcontext()
-                            if report:
-                                from aris.article_audit import capture
-                                from aris.daily_runs import audit_path
-                                audit = capture(audit_path(DATA, os.environ['CORPUS_RUN_ID'], source_index))
-                            with audit:
-                                if not process(source,args): good=False
-                        except Exception:
-                            log.exception('source_execution_failed')
-                            good=False
-                        finally:
-                            if report:
-                                from aris.daily_runs import update_source
-                                update_source(report,source['key'],args.last_manifest,source_started)
-                if report:
-                    from aris.daily_runs import finish
-                    finish(report)
-                return 0 if good else 1
+                if args.command in ('export', 'ingest'):
+                    args.command = 'collect'
+                args.target_date = normalize_target_date(os.getenv('CORPUS_TARGET_DATE', yesterday()))
+                work = DATA / f'.work-{job_id}'
+                for orphan in DATA.glob('.work-*'):
+                    if orphan.is_dir() and not orphan.is_symlink():
+                        shutil.rmtree(orphan)
+                args.staging = work / 'result'
+                args.staging.mkdir(parents=True)
+                try:
+                    return collect_day(rows, args, job_id, work)
+                finally:
+                    shutil.rmtree(work)
         except BaseException:
-            if report:
-                from aris.daily_runs import finish
-                finish(report,interrupted=True)
             log.exception('pipeline_failed duration_seconds=%.3f', time.monotonic() - started)
             return 1
+
+
+def collect_day(rows, args, job_id, work):
+    started_at = stamp()
+    results = []
+    interrupted = False
+    replace_all = args.limit is None and len(rows) == len(sources())
+    for index, source in enumerate(rows):
+        folder = source_directory(source['key'])
+        source_started = stamp()
+        args.audit = work / f'audit-{index}.jsonl'
+        args.result = None
+        with log_context(source_id=source['key'], source_name=source['name']):
+            try:
+                with capture(args.audit):
+                    process(source, args)
+            except KeyboardInterrupt:
+                interrupted = True
+            except Exception:
+                log.exception('source_execution_failed')
+            if args.result is None:
+                partial = args.staging / folder
+                if partial.is_dir():
+                    shutil.rmtree(partial)
+                message = '任务中断' if interrupted else '来源执行失败，请查看采集日志'
+                args.result = source_result(source, folder, source_started, errors=[message], audit=args.audit)
+            (args.staging / folder).mkdir(exist_ok=True)
+            results.append(args.result)
+        if interrupted:
+            break
+    for source in rows[len(results):]:
+        folder = source_directory(source['key'])
+        (args.staging / folder).mkdir()
+        results.append(source_result(source, folder, stamp(), errors=['任务中断，来源未执行']))
+    status = 'success'
+    if interrupted:
+        status = 'interrupted'
+    elif any(result['collection']['status'] == 'failed' for result in results):
+        status = 'failed'
+    report = dict(version=1, job_id=job_id, target_date=args.target_date, timezone='Asia/Shanghai',
+                  execution_date=publication_day(started_at).isoformat(), started_at=started_at,
+                  finished_at=stamp(), status=status, sources=results)
+    destination = publish_date(DATA, args.staging, report, replace_all)
+    prune_dates(DATA)
+    log.info('daily_archive_published path=%s status=%s', destination, status)
+    return int(status != 'success')
 
 
 if __name__ == '__main__':

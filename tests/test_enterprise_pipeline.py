@@ -248,7 +248,7 @@ class ServiceContracts(unittest.TestCase):
         self.assertEqual(factory.call_args.kwargs['config'].proxies,{})
         self.assertEqual(factory.call_args.kwargs['endpoint_url'],'https://objects.test')
     def test_one_source_failure_does_not_stop_others(self):
-        with tempfile.TemporaryDirectory() as td, patch.object(run,'STATE',Path(td)), \
+        with tempfile.TemporaryDirectory() as td, patch.object(run,'STATE',Path(td)), patch.object(run,'DATA',Path(td)/'data'), \
              patch('run.setup_logging'), \
              patch('run.select_sources',return_value=[{'key':'web:bad','name':'bad'},{'key':'web:good','name':'good'}]), \
              patch('run.process',side_effect=[RuntimeError('bad'),True]) as process:

@@ -1,6 +1,6 @@
 # 语料读取 API 与 MCP 接口契约 v1
 
-状态：读取 API / MCP 位于 research-data-service 项目，由服务器 B 部署。A 仅采集并发布本地批次，B 的独立 sync.py 每日主动拉取并写入既有四表，api_service.py 负责查询。详见 deployment.md 和 transfer-protocol.md。
+状态：读取 API / MCP 位于 research-data-service 项目，由服务器 B 部署。A 采集并发布日期归档，B 的独立 sync.py 每日主动拉取并写入既有四表，api_service.py 负责查询。详见 deployment.md 和 transfer-protocol.md。
 
 ## 1. 服务关系与范围
 

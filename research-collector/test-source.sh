@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-collector_dir="${COLLECTOR_DIR:-/opt/app/research-collector}"
+collector_dir="${COLLECTOR_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
 python="$collector_dir/.venv/bin/python"
 if [[ ! -x "$python" ]]; then
     printf '找不到采集服务的 Python：%s\n' "$python" >&2
@@ -96,51 +96,33 @@ def show_source(source, target):
             print("已保存文章的发布日期核对通过" if dates_ok else "发现发布日期与目标日期不符的文章")
         for article in audit["success"]:
             print(f"  {article['publication_date_beijing']}  {article['title']}")
-    if not source.get("batch_id"):
-        print("本轮未生成文章批次。")
-        return False
-
-    batch_dir = ROOT / "data/batches" / source["batch_id"]
-    article_file = batch_dir / "articles.jsonl"
-    if not article_file.is_file():
-        print(f"找不到批次正文：{article_file}")
-        return False
-    print(f"正文：{article_file}")
-    if (batch_dir / "images").is_dir():
-        print(f"图片目录：{batch_dir / 'images'}")
     return result["status"] == "success" and dates_ok
 
 
-def show_result(job, run_id):
-    report_file = ROOT / "data/runs" / f"{run_id}.json"
+def show_result(job):
+    directory = ROOT / "data/archive" / job["target_date"].replace("-", "")
+    report_file = directory / "report.json"
     print(f"任务状态：{job['status']}")
     if job.get("error"):
         print(job["error"])
     if not report_file.is_file():
         print(f"没有生成执行报告。请查看：{ROOT / 'logs/pipeline.log'}")
         return 1
-
     report = json.loads(report_file.read_text(encoding="utf-8"))
     print(f"目标发布日期（北京时间）：{report['target_date']}")
-    completion_file = report_file.with_suffix(".md")
-    if completion_file.is_file():
-        print(f"采集任务完成表：{completion_file}")
-    print(f"逐篇 JSON：{report_file}")
-    raw_dir = ROOT / "data/daily" / run_id / "raw"
-    if raw_dir.is_dir():
-        print(f"本轮原始文件目录：{raw_dir}")
-    if any("articles" not in source for source in report["sources"]):
-        print("本轮报告没有逐篇明细。请升级并重启 A 的采集服务。")
-        return 1
-    results = [show_source(source, report["target_date"]) for source in report["sources"]]
-    if job["status"] != "success" or not all(results):
+    print(f"采集任务完成表：{directory / 'report.md'}")
+    print(f"正文和图片目录：{directory}")
+    if job["status"] != "success":
         print(f"采集日志：{ROOT / 'logs/pipeline.log'}")
         return 1
-    return 0
+    selected = set(job['sources'])
+    results = [show_source(source, report["target_date"]) for source in report["sources"]
+               if source['source_id'] in selected]
+    return int(not all(results))
 
 
 def main():
-    parser = argparse.ArgumentParser(description="采集指定编号的来源或全部来源")
+    parser = argparse.ArgumentParser(prog="test-source.sh", description="采集指定编号的来源或全部来源")
     parser.add_argument("source", nargs="?", help="来源编号或 all，省略时交互选择")
     args = parser.parse_args(sys.argv[2:])
     port, token = settings()
@@ -149,7 +131,7 @@ def main():
     if payload is None:
         return 0
     job = request(port, token, "/jobs/today", payload)
-    job_id, run_id = job["id"], job["run_id"]
+    job_id = job["id"]
     count = len(sources) if payload["scope"] == "all" else 1
     print(f"正在采集 {count} 个来源，任务 ID {job_id}", flush=True)
     started = time.monotonic()
@@ -163,7 +145,7 @@ def main():
             last_update = now
         time.sleep(POLL_SECONDS)
         job = request(port, token, f"/jobs/{job_id}")
-    return show_result(job, run_id)
+    return show_result(job)
 
 
 try:

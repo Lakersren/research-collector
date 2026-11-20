@@ -17,8 +17,7 @@ REPO=Path(__file__).resolve().parents[1];A=REPO/'research-collector'
 sys.path[:0]=[str(A),str(A/'lib'),str(REPO/'research-data-service'),str(REPO/'research-data-service/lib'),str(REPO/'shared/lib'),str(REPO/'contracts')]
 os.environ.setdefault('ARIS_ROOT',str(A))
 from aris.daily_policy import matches,yesterday
-from aris import daily_runs,web_media
-from corpus_contract import Collection,RunReport
+from aris import daily_archive,web_media
 from collectors import substack_sites as sub,web_rss_sites as rss,epoch_site as epoch,semianalysis as semi
 
 class DailyTests(unittest.TestCase):
@@ -54,20 +53,16 @@ class DailyTests(unittest.TestCase):
             import yaml
             (self.root/'config').mkdir()
             (self.root/'config/web_sources.yaml').write_text(yaml.safe_dump({'rss':[dict(key='web:fixture',name='Fixture',feed=f'http://127.0.0.1:{server.server_port}/feed',full_in_feed=True)]}))
-            (self.root/'data/raw').mkdir(parents=True);(self.root/'data/raw/history').write_text('old')
             env={k:v for k,v in os.environ.items() if k not in ('ARIS_RAW_ROOT','CORPUS_RUN_ID','CORPUS_TARGET_DATE')}
             env.update(ARIS_ROOT=str(self.root),ARIS_OVERSEAS_DIRECT='1');env.pop('ARIS_PROXY_URL',None)
             result=subprocess.run([sys.executable,str(A/'run.py'),'collect','--source','fixture'],env=env,cwd=self.root,capture_output=True,text=True,timeout=20)
             self.assertEqual(result.returncode,1,result.stderr)
-            reports=list((self.root/'data/runs').glob('*.json'));self.assertEqual(len(reports),1)
-            report=json.loads(reports[0].read_text())
+            archive = self.root / 'data/archive' / target.strftime('%Y%m%d')
+            report=json.loads((archive / 'report.json').read_text())
             self.assertEqual(report['target_date'],target.isoformat())
             self.assertEqual(report['status'],'failed')
             source=report['sources'][0]
             audit=source['articles']
-            batch=self.root/'data/batches'/source['batch_id']
-            articles=[json.loads(x) for x in (batch/'articles.jsonl').read_text().splitlines() if x.strip()]
-            self.assertCountEqual([row['title'] for row in articles],['Article 1','Article 4'])
             self.assertCountEqual([row['title'] for row in audit['success']],['Article 1','Article 4'])
             self.assertTrue(all(row['publication_date_beijing']==target.isoformat() for row in audit['success']))
             self.assertEqual(source['collection']['n_failed'],1)
@@ -77,15 +72,17 @@ class DailyTests(unittest.TestCase):
             self.assertEqual([row['title'] for row in audit['skipped']],['Article 0','Article 3'])
             self.assertEqual([row['publication_date_beijing'] for row in audit['skipped']],
                              [(target-timedelta(days=1)).isoformat(),(target+timedelta(days=1)).isoformat()])
-            completion = reports[0].with_suffix('.md').read_text()
+            completion = (archive / 'report.md').read_text()
             self.assertIn('| Fixture | 失败 | 2 | 1 | 2 |', completion)
             self.assertIn('全部已保存文章的北京时间发布日期与目标日期一致', completion)
             self.assertIn(f'| 失败 | {target} |', completion)
             self.assertIn(f'| 跳过 | {target + timedelta(days=1)} |', completion)
             self.assertIn('Article 2', completion)
             self.assertIn('404', completion)
-            self.assertFalse((self.root/'data/raw').exists())
-            self.assertEqual(len(list((self.root/'data/daily').glob('*/raw/web/fixture/items/*.json'))),2)
+            self.assertEqual(source['article_counts'], {'success': 2, 'failed': 1, 'skipped': 2})
+            self.assertEqual(sorted((archive / item['text_path']).read_text() for item in audit['success']),
+                             ['Body 1', 'Body 4'])
+            self.assertEqual([path.name for path in (self.root/'data').iterdir()], ['archive'])
         finally:
             server.shutdown();server.server_close();thread.join(3)
 
@@ -133,35 +130,11 @@ class DailyTests(unittest.TestCase):
         with patch.object(semi,'sub_archive',return_value=posts),patch.object(semi,'sub_post',return_value={}) as fetch,patch.object(semi.time,'sleep'):
             result=semi.collect_substack(full=False,redo=False,limit_posts=None,st={})
         self.assertEqual(result['n_fetched'],1);fetch.assert_called_once_with('2')
-    def test_retention_removes_legacy_cache_and_exact_seven_day_boundary(self):
-        data=self.root/'data'
-        for folder in ('raw','batches'):
-            (data/folder).mkdir(parents=True);(data/folder/'old-history').write_text('old')
-        daily_runs.cleanup(data,self.state,today=date(2026,11,19))
-        self.assertFalse((data/'raw').exists());self.assertFalse((data/'batches').exists())
-        for day in (12,13):
-            # 03:00 UTC is the same calendar day in Shanghai.
-            ident=f'202611{day}030000000000-'+'a'*32
-            for folder in ('daily','batches'):
-                (data/folder/ident).mkdir(parents=True)
-            (data/'runs').mkdir(exist_ok=True);(data/'runs'/(ident+'.json')).write_text('{}')
-            (data/'runs'/(ident+'.md')).write_text('# 采集任务完成表')
-        daily_runs.cleanup(data,self.state,today=date(2026,11,19))
-        for folder in ('daily','batches','runs'):
-            kept = list((data/folder).iterdir())
-            self.assertEqual(len(kept), 2 if folder == 'runs' else 1)
-            self.assertTrue(all('20261113' in entry.name for entry in kept))
-        self.assertTrue((self.state/'daily-only-v1.json').is_file())
-    def test_report_recovery_marks_unfinished_sources_failed(self):
-        sources=[dict(key='web:one',name='one'),dict(key='web:two',name='two')]
-        job=str(uuid.uuid4());path=daily_runs.begin(job,sources,self.root,target_date='2026-11-18')
-        report=daily_runs.finish(path,interrupted=True)
-        self.assertEqual(report.status,'interrupted');self.assertEqual(len(report.sources),2)
-        self.assertTrue(all(s.collection.status=='failed' and s.batch_id is None for s in report.sources))
-        self.assertFalse(path.exists())
-        saved=json.loads((self.root/'runs'/(report.id+'.json')).read_text())
-        for source in saved['sources']:
-            self.assertEqual(source.pop('articles'),{'success': [], 'failed': [], 'skipped': []})
-        self.assertEqual(RunReport.model_validate(saved),report)
+    def test_retention_keeps_seven_target_dates(self):
+        data = self.root / 'data'
+        for day in ('20261111', '20261112', '20261118'):
+            (data / 'archive' / day).mkdir(parents=True)
+        daily_archive.prune_dates(data, today=date(2026, 11, 19))
+        self.assertEqual(sorted(p.name for p in (data / 'archive').iterdir()), ['20261112', '20261118'])
 
 if __name__=='__main__':unittest.main()

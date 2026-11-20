@@ -65,7 +65,8 @@ class DispatchTests(unittest.TestCase):
 
     def test_timeout_kills_process_and_records_failure(self):
         process = Mock(stdout=io.StringIO(''))
-        process.wait.side_effect = [subprocess.TimeoutExpired(['worker'], 1), -9]
+        process.wait.side_effect = [subprocess.TimeoutExpired(['worker'], 1),
+                                    subprocess.TimeoutExpired(['worker'], 10), -9]
         with patch('aris.dispatch.subprocess.Popen', return_value=process):
             dispatcher = Dispatcher(self.state)
             record = dispatcher.submit(sources=['servethehome'], timeout_seconds=1)
@@ -73,6 +74,7 @@ class DispatchTests(unittest.TestCase):
         result = dispatcher.get(record['id'])
         self.assertEqual(result['exit_code'], 124)
         self.assertEqual(result['status'], 'failed')
+        process.terminate.assert_called_once()
         process.kill.assert_called_once()
 
     def test_worker_failure_is_not_reported_as_success(self):

@@ -105,9 +105,8 @@ def render(report):
                     )
         else:
             lines.append("本轮没有逐篇记录。")
-        if source["batch_id"]:
-            batch = f"../batches/{source['batch_id']}"
-            lines += ["", f"[文章数据]({batch}/articles.jsonl) · [批次清单]({batch}/manifest.json)"]
-
-    lines += ["", f"任务 ID `{report['job_id']}` · [原始 JSON]({report['id']}.json)", ""]
+    latest = report.get('latest_attempt', report)
+    if latest['job_id'] != report['job_id']:
+        lines += ["", f"最近一次执行 {STATUS[latest['status']]}，已保留此前的文章结果。"]
+    lines += ["", f"最近任务 ID `{latest['job_id']}` · [JSON 报告](report.json)", ""]
     return "\n".join(lines)

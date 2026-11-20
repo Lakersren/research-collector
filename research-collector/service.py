@@ -88,7 +88,7 @@ def scheduled_submit(dispatcher, item):
         log.exception('schedule_submission_failed schedule_id=%s', item.id)
 
 
-def create_app(config_path=None, dispatcher_factory=Dispatcher, *, batch_root=None):
+def create_app(config_path=None, dispatcher_factory=Dispatcher, *, archive_root=None):
     config_path = config_path or CONFIG / 'schedule.yaml'
     token = os.getenv('CORPUS_API_TOKEN', '')
     if len(token) < 24:
@@ -172,8 +172,8 @@ def create_app(config_path=None, dispatcher_factory=Dispatcher, *, batch_root=No
         except KeyError:
             raise HTTPException(status_code=404, detail='任务不存在') from None
 
-    from aris.transfer_api import install_batch_routes
-    install_batch_routes(app, root=batch_root)
+    from aris.transfer_api import install_archive_routes
+    install_archive_routes(app, root=archive_root)
     return app
 
 

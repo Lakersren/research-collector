@@ -1,9 +1,15 @@
 """Calendar-day policy shared by collector filtering and receiver validation."""
 from datetime import date,datetime,timedelta,timezone
 import os
+import re
 from zoneinfo import ZoneInfo
 
 SHANGHAI=ZoneInfo('Asia/Shanghai')
+
+def normalize_target_date(value):
+    if not re.fullmatch(r'[0-9]{8}|[0-9]{4}-[0-9]{2}-[0-9]{2}', value):
+        raise ValueError('日期须为 YYYYMMDD 或 YYYY-MM-DD')
+    return date.fromisoformat(value).isoformat()
 
 def yesterday(now=None):
     return ((now or datetime.now(SHANGHAI)).astimezone(SHANGHAI).date()-timedelta(days=1)).isoformat()

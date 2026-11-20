@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import threading
@@ -28,7 +29,7 @@ class Dispatcher:
         self.directory = Path(state if state is not None else STATE) / 'jobs'
         self.directory.mkdir(parents=True, exist_ok=True)
         self.root = Path(root if root is not None else ROOT)
-        self.report_data = Path(state).parent/'data' if state is not None else self.root/'data'
+        self.data = Path(state).parent / 'data' if state is not None else self.root / 'data'
         self.guard = threading.RLock()
         self.active = None
         self.thread = None
@@ -39,10 +40,14 @@ class Dispatcher:
             record = json.loads(path.read_text())
             if record['status'] in ('queued', 'running'):
                 record.update(status='interrupted', finished_at=now(), error='服务重启，前次任务未正常完成')
+                self._discard_workspace(record['id'])
                 self._save(record)
-                from aris.daily_runs import finish_job
-                finish_job(record['id'],self.report_data)
                 log.warning('recovered_interrupted_job job_id=%s', record['id'])
+
+    def _discard_workspace(self, job_id):
+        workspace = self.data / f'.work-{uuid.UUID(job_id)}'
+        if workspace.is_dir() and not workspace.is_symlink():
+            shutil.rmtree(workspace)
 
     def _save(self, record):
         path = self.directory / (record['id'] + '.json')
@@ -79,9 +84,8 @@ class Dispatcher:
             if self.active or self.stopping:
                 raise BusyError('已有任务执行中或服务正在停止，请稍后重试')
             job_id = str(uuid.uuid4())
-            from aris.daily_runs import new_id
             from aris.daily_policy import yesterday
-            record = dict(run_id=new_id(),target_date=yesterday(),id=job_id, command=command, sources=[s['key'] for s in selected],
+            record = dict(target_date=yesterday(),id=job_id, command=command, sources=[s['key'] for s in selected],
                           limit=limit, full=full, redo=redo, trigger=trigger, status='queued',
                           created_at=now(), started_at=None, finished_at=None, exit_code=None,
                           error=None, timeout_seconds=timeout_seconds)
@@ -102,9 +106,6 @@ class Dispatcher:
             record.update(status='running', started_at=now())
             try:
                 self._save(record)
-                from aris.daily_runs import begin
-                from run import select_sources
-                begin(record['id'],select_sources(record['sources']),self.report_data,record['run_id'],record['target_date'])
                 args = [sys.executable, '-u', str(self.root / 'run.py'), record['command'],
                         '--job-id', record['id'], '--trigger', record['trigger']]
                 for source in record['sources']:
@@ -121,7 +122,7 @@ class Dispatcher:
                     # Structured worker logs already live in pipeline.log. Capture unexpected
                     # stderr as well, e.g. an import failure before worker logging initializes.
                     self.process = subprocess.Popen(args, cwd=self.root,
-                                                    env={**os.environ,'CORPUS_RUN_ID':record['run_id'],'CORPUS_TARGET_DATE':record['target_date']},
+                                                    env={**os.environ,'CORPUS_JOB_ID':record['id'],'CORPUS_TARGET_DATE':record['target_date']},
                                                     stdout=subprocess.PIPE,
                                                     stderr=subprocess.STDOUT, text=True,
                                                     encoding='utf-8', errors='replace')
@@ -134,9 +135,14 @@ class Dispatcher:
                     record.update(exit_code=code, status='success' if code == 0 else 'failed',
                                   error=None if code == 0 else '采集任务失败，请按 job_id 查询 pipeline.log')
                 except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
-                    record.update(exit_code=124, status='failed', error='任务超时，已停止；结果文件将记录未完成来源，不自动补采历史日期')
+                    process.terminate()
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                    record.update(exit_code=124, status='failed',
+                                  error='任务超时，已停止；已有日期归档保留')
                     log.error('job_timeout seconds=%s', record['timeout_seconds'])
                 finally:
                     reader.join(timeout=2)
@@ -146,12 +152,10 @@ class Dispatcher:
                 record.update(status='failed', error='执行器异常，请按 job_id 查询 service.log')
                 log.exception('job_executor_failed')
             finally:
-                from aris.daily_runs import finish_job
                 try:
-                    finish_job(record['id'],self.report_data,interrupted=record['status']!='success')
-                except Exception:
-                    log.exception('daily_report_finalization_failed')
-                    record.update(status='failed',error='任务结果文件写入失败，请检查 service.log')
+                    self._discard_workspace(record['id'])
+                except OSError:
+                    log.exception('workspace_cleanup_failed')
                 record['finished_at'] = now()
                 try:
                     self._save(record)
