@@ -21,12 +21,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "lib"), str(ROOT)]
 
 # ⚠️ 必须在 sys.path.insert 之后（从别的 cwd 跑会 ModuleNotFoundError，实测踩过）
-from aris.net_route import RouteConfigError, overseas_urlopen  # noqa: E402
+from aris.net_route import PROXY_URL, RouteConfigError, overseas_urlopen  # noqa: E402
 from aris.daily_policy import candidate, matches, publication_day
 from aris.article_audit import date_rejection, page_publication_date, record
 from aris.paths import CONFIG, SOURCE_STATE as STATE  # noqa: E402
 from aris import web_media as wm  # noqa: E402
-from collectors.sites import anthropic, kimi
+from collectors.sites import anthropic, kimi, stratechery
 from collectors.web_entries import HTML_TAG as _TAG, parse_date, parse_html_list, plain_html
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -552,7 +552,16 @@ def collect_site(cfg: dict, *, redo: bool, limit_items: int | None,
                              browser_headers=bool(cfg.get("browser_headers")),
                              ua=cfg.get("ua"))
         except FetchError as exc:
-            raise FetchError(f"{entry_kind}请求失败：{exc}", code=exc.code) from exc
+            if key != "web:stratechery" or exc.code != 403 or PROXY_URL:
+                raise FetchError(f"{entry_kind}请求失败：{exc}", code=exc.code) from exc
+            log(f"  {name}: 订阅源直连返回 HTTP 403，改用无头 Firefox 下载")
+            try:
+                txt = stratechery.download_feed(feed_url)
+            except (OSError, RuntimeError) as browser_error:
+                raise FetchError(
+                    f"{entry_kind}请求失败：{exc}；无头 Firefox 下载失败：{browser_error}",
+                    code=exc.code,
+                ) from browser_error
         parser = _HTML_LIST_PARSERS.get(key)
         if is_html_list and parser:
             items = parser(txt, feed_url)
