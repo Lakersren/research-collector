@@ -242,6 +242,7 @@ rss:
   - key: web:msresearch
     name: Microsoft Research Blog
     feed: https://www.microsoft.com/en-us/research/feed/
+    fallback_feed: https://www.microsoft.com/en-us/research/feed/atom/
     full_in_feed: true
     note: >-
       10 条，`content:encoded` **58,110 字符全文** ⇒ 零额外请求。

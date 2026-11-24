@@ -41,7 +41,7 @@ _HTML_LIST_PARSERS = {
 
 # 配置表允许的字段（未知字段一律报错，见 load_cfg）
 _KNOWN_RSS_KEYS = {
-    "key", "name", "feed", "full_in_feed", "kind", "note",
+    "key", "name", "feed", "fallback_feed", "full_in_feed", "kind", "note",
     "list_path_prefix", "list_exclude_paths", "trailing_slash", "browser_headers", "ua",
 }
 
@@ -232,6 +232,31 @@ def fetch(url: str, *, timeout: float = 60, retries: int = 4,
 
 def fetch_text(url: str, **kw) -> str:
     return fetch(url, **kw).decode("utf-8", "replace")
+
+
+def fetch_list(cfg: dict) -> str:
+    options = {
+        "browser_headers": bool(cfg.get("browser_headers")),
+        "ua": cfg.get("ua"),
+    }
+    fallback = cfg.get("fallback_feed")
+    if not fallback:
+        return fetch_text(cfg["feed"], **options)
+
+    # Leave time for the alternate feed when the primary endpoint stalls.
+    try:
+        return fetch_text(cfg["feed"], timeout=15, retries=2, **options)
+    except FetchError as exc:
+        if exc.code is not None and not 500 <= exc.code <= 599:
+            raise
+        log(f"  {cfg['name']}: 主订阅源请求失败（{exc}），尝试备用订阅源")
+        try:
+            return fetch_text(fallback, timeout=15, retries=2, **options)
+        except FetchError as fallback_error:
+            raise FetchError(
+                f"主订阅源失败（{exc}），备用订阅源失败（{fallback_error}）",
+                code=fallback_error.code,
+            ) from fallback_error
 
 
 # ---------------------------------------------------------------- feed 解析
@@ -548,9 +573,7 @@ def collect_site(cfg: dict, *, redo: bool, limit_items: int | None,
         #    而 Stratechery 的 WAF 拦的是 feed 本身（09-11 连续 235 轮 403，封 Chrome UA）。
         entry_kind = "HTML 列表页" if is_html_list else "订阅源"
         try:
-            txt = fetch_text(feed_url,
-                             browser_headers=bool(cfg.get("browser_headers")),
-                             ua=cfg.get("ua"))
+            txt = fetch_list(cfg)
         except FetchError as exc:
             if key != "web:stratechery" or exc.code != 403 or PROXY_URL:
                 raise FetchError(f"{entry_kind}请求失败：{exc}", code=exc.code) from exc
