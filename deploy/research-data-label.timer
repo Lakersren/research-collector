@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily research article classification at 02:00 Asia/Shanghai
+[Timer]
+OnCalendar=*-*-* 02:00:00 Asia/Shanghai
+Persistent=true
+Unit=research-data-label.service
+[Install]
+WantedBy=timers.target

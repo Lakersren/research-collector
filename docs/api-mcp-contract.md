@@ -119,6 +119,10 @@ API 机器定义见 [openapi-read.yaml](../contracts/openapi-read.yaml)；MCP �
 }
 ```
 
+列表和 `search_articles` 支持 `industry`、`theme` 标签值筛选。两项同时提供时取交集。已打标的文章在列表和详情附带 `labels`，每项包含 `label_type`、`label_value`、`is_primary`。
+
+设置 `merge_duplicates=true` 可合并筛选结果中完整正文相同的文章。每组按请求的排序取首条并返回不同来源数 `source_count`，分页也按合并后的结果计算。默认逐篇返回。
+
 ## 5. 文章详情
 
 `GET /v1/articles/{id}`

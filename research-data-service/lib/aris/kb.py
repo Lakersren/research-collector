@@ -1,4 +1,5 @@
 """Existing MySQL tables only. No DDL or infrastructure provisioning."""
+import hashlib
 import json
 import os
 import ssl
@@ -6,10 +7,18 @@ from datetime import datetime, timezone
 
 SCHEMA = {
     "source": "id name channel trust note first_ts last_ts n_docs".split(),
-    "doc": "id source_id title authors published_at url content_state content ingested_at".split(),
+    "doc": "id source_id title authors published_at url content_state content ingested_at content_hash".split(),
+    "doc_label": "doc_id label_type label_value is_primary labeled_at".split(),
     "doc_image": "doc_id position file_key status width height".split(),
     "collection_run": "id source_id started_at finished_at n_discovered n_fetched n_failed status error".split(),
 }
+
+def article_content_hash(state, content):
+    if state != 'ready' or not content:
+        return None
+    normalized = content.replace('\r\n', '\n').replace('\r', '\n').strip()
+    return hashlib.sha256(normalized.encode('utf-8')).digest() if normalized else None
+
 
 def utcnow():
     return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -92,13 +101,20 @@ class Repository:
 
     def save_article(self, doc, images):
         cols = SCHEMA['doc']
-        row = {**doc, 'authors': json.dumps(doc['authors'], ensure_ascii=False), 'ingested_at': utcnow()}
+        row = {
+            **doc, 'authors': json.dumps(doc['authors'], ensure_ascii=False), 'ingested_at': utcnow(),
+            'content_hash': article_content_hash(doc['content_state'], doc['content']),
+        }
         updates = ','.join(f"`{x}`=VALUES(`{x}`)" for x in cols if x not in ('id', 'ingested_at'))
         try:
             with self.conn.cursor() as c:
+                c.execute('SELECT title,content,content_state FROM doc WHERE id=%s FOR UPDATE', (doc['id'],))
+                previous = c.fetchone()
                 c.execute("INSERT INTO `doc` (" + ','.join(f"`{x}`" for x in cols) +
                           ") VALUES (" + ','.join(['%s']*len(cols)) + ") ON DUPLICATE KEY UPDATE " + updates,
                           tuple(row[x] for x in cols))
+                if previous and previous != (doc['title'], doc['content'], doc['content_state']):
+                    c.execute('DELETE FROM doc_label WHERE doc_id=%s', (doc['id'],))
                 c.execute("DELETE FROM `doc_image` WHERE `doc_id`=%s", (doc['id'],))
                 if images:
                     c.executemany("""INSERT INTO `doc_image`

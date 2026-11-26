@@ -59,6 +59,9 @@ class SearchQuery(BaseModel):
     published_to: str | None = None
     ingested_from: str | None = None
     ingested_to: str | None = None
+    merge_duplicates: bool = False
+    industry: str | None = Field(default=None, min_length=1, max_length=128)
+    theme: str | None = Field(default=None, min_length=1, max_length=128)
     sort: Literal['published_at', 'ingested_at'] = 'published_at'
     page_size: int = Field(default=20, ge=1, le=100)
     cursor: str | None = Field(default=None, min_length=1, max_length=2048)
@@ -184,10 +187,34 @@ class ReadRepository:
                 if value is not None:
                     conditions.append(f'd.{column} {operator} %s')
                     params.append(parse_time(value).replace(tzinfo=None))
+        for label_type in ('industry', 'theme'):
+            if query.get(label_type) is not None:
+                conditions.append(
+                    'EXISTS (SELECT 1 FROM doc_label l WHERE l.doc_id=d.id '
+                    'AND l.label_type=%s AND l.label_value=%s)'
+                )
+                params.extend((label_type, query[label_type]))
         # sort is validated before reaching SQL and still explicitly checked here.
         sort = query['sort']
         if sort not in ('published_at','ingested_at'):
             raise invalid('排序字段无效')
+        prefix = ''
+        table = '`doc` d'
+        group_columns = ''
+        if query.get('merge_duplicates'):
+            # Group the filtered result first, then apply the cursor to representative rows.
+            prefix = (
+                f'WITH matched AS (SELECT d.id,d.content_hash,d.source_id,d.{sort} FROM doc d WHERE '
+                + ' AND '.join(conditions)
+                + f'), ranked AS (SELECT matched.*, ROW_NUMBER() OVER (PARTITION BY content_hash, '
+                  f'CASE WHEN content_hash IS NULL THEN id END ORDER BY {sort} DESC, CAST(id AS BINARY) DESC) AS rn '
+                  f'FROM matched), group_sources AS (SELECT content_hash, COUNT(DISTINCT source_id) AS source_count '
+                  f'FROM matched WHERE content_hash IS NOT NULL GROUP BY content_hash) '
+            )
+            table += (' JOIN ranked r ON r.id=d.id '
+                      'LEFT JOIN group_sources g ON g.content_hash=r.content_hash')
+            group_columns = ',COALESCE(g.source_count,1) AS source_count'
+            conditions = ['r.rn=1']
         if last:
             if last['last_time'] is None:
                 conditions.append(f'd.{sort} IS NULL AND CAST(d.id AS BINARY)<CAST(%s AS BINARY)')
@@ -201,11 +228,28 @@ class ReadRepository:
                 params.extend([when,when,last['last_id']])
         params.append(query['page_size']+1)
         return self._query(
-            "SELECT d.id,d.source_id,d.title,d.authors,d.published_at,d.ingested_at,d.url,d.content_state,"
+            prefix + "SELECT d.id,d.source_id,d.title,d.authors,d.published_at,d.ingested_at,d.url,d.content_state,"
             "CASE WHEN d.content_state='no_text' THEN NULL ELSE "
-            "LEFT(TRIM(REGEXP_REPLACE(d.content,'[[:space:]]+',' ')),300) END AS summary "
-            'FROM `doc` d WHERE '+' AND '.join(conditions)+
+            "LEFT(TRIM(REGEXP_REPLACE(d.content,'[[:space:]]+',' ')),300) END AS summary"
+            + group_columns + ' FROM ' + table + ' WHERE ' + ' AND '.join(conditions) +
             f' ORDER BY d.{sort} DESC,CAST(d.id AS BINARY) DESC LIMIT %s', tuple(params))
+
+    def labels(self, article_ids):
+        if not article_ids:
+            return {}
+        placeholders = ','.join(['%s'] * len(article_ids))
+        rows = self._query(
+            f'SELECT doc_id,label_type,label_value,is_primary FROM doc_label '
+            f'WHERE doc_id IN ({placeholders}) ORDER BY label_type,label_value',
+            article_ids,
+        )
+        labels = {}
+        for row in rows:
+            labels.setdefault(row['doc_id'], []).append(
+                dict(label_type=row['label_type'], label_value=row['label_value'],
+                     is_primary=bool(row['is_primary']))
+            )
+        return labels
 
     def article(self, article_id):
         rows = self._query('SELECT id,source_id,title,authors,published_at,ingested_at,url,content_state,content '
@@ -266,6 +310,9 @@ class ArticleReader:
 
     def search_articles(self, query):
         normalized = query.model_dump(exclude={'cursor'})
+        for field in ('industry', 'theme', 'merge_duplicates'):
+            if not normalized[field]:
+                del normalized[field]
         normalized['source_id'] = query.source_id or sorted(self.source_map)
         if any(key not in self.source_map for key in normalized['source_id']):
             raise invalid('存在未登记的来源 ID')
@@ -275,17 +322,20 @@ class ArticleReader:
         expires_at = last['expires_at'] if last else int(as_of.timestamp())+86400
         with self.sessions() as repo:
             rows = repo.search(normalized, as_of, last)
-        more = len(rows)>query.page_size
-        rows = rows[:query.page_size]
+            more = len(rows) > query.page_size
+            rows = rows[:query.page_size]
+            labels = repo.labels([row['id'] for row in rows])
         next_cursor = None
         if more:
             tail = rows[-1]
             next_cursor = self.cursors.encode(fingerprint,as_of,expires_at,tail[query.sort],tail['id'])
-        return {'items':[self._present(row) for row in rows],
+        return {'items':[self._present(row, labels.get(row['id'])) for row in rows],
                 'page':{'next_cursor':next_cursor,'has_more':more}}
 
-    def _present(self, row):
+    def _present(self, row, labels=None):
         result = dict(row)
+        if labels:
+            result['labels'] = labels
         result['source_name'] = self.source_map[result['source_id']]['name']
         authors = result['authors']
         result['authors'] = json.loads(authors) if isinstance(authors,(str,bytes)) else authors
@@ -323,7 +373,8 @@ class ArticleReader:
         with self.sessions() as repo:
             row = self._get(repo,article_id)
             images = repo.images(article_id)
-        return {**self._present(row),'images':self._images(images)}
+            labels = repo.labels([article_id]).get(article_id)
+        return {**self._present(row, labels),'images':self._images(images)}
 
     def get_article_images(self, article_id):
         with self.sessions() as repo:

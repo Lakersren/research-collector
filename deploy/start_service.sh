@@ -14,7 +14,7 @@ case "$role" in
     project=research-data-service
     service=research-data-api.service
     env_files=(api.env sync.env)
-    units=("$service" research-data-sync.service research-data-sync.timer)
+    units=("$service" research-data-sync.service research-data-sync.timer research-data-label.service research-data-label.timer)
     ;;
   *) echo '仅支持 collector 或 data' >&2; exit 1 ;;
 esac
@@ -80,6 +80,7 @@ if [[ "$EUID" -ne 0 ]]; then control=(sudo systemctl); fi
 "${control[@]}" restart "$service"
 if [[ "$role" == data ]]; then
   "${control[@]}" start research-data-sync.timer
+  "${control[@]}" restart research-data-label.timer
 fi
 "${control[@]}" is-active --quiet "$service"
 echo "已启动：${service}（配置和数据保持不变）"

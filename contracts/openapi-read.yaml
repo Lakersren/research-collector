@@ -134,6 +134,26 @@ paths:
           minimum: 1
           maximum: 100
           default: 20
+      - name: merge_duplicates
+        in: query
+        schema:
+          type: boolean
+          default: false
+        description: 按条件筛选后合并相同完整正文，代表行包含来源数。
+      - name: industry
+        in: query
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+        description: 行业标签全名。
+      - name: theme
+        in: query
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+        description: 主题概念标签全名。
       - name: cursor
         in: query
         required: false
@@ -348,6 +368,14 @@ components:
           - ready
           - preview
           - no_text
+        labels:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArticleLabel'
+        source_count:
+          type: integer
+          minimum: 1
+          description: 合并模式下，组内符合筛选条件的不同来源数。
         summary:
           anyOf:
           - type: string
@@ -365,6 +393,18 @@ components:
       - url
       - content_state
       - summary
+    ArticleLabel:
+      type: object
+      additionalProperties: false
+      properties:
+        label_type:
+          type: string
+          enum: [industry, theme]
+        label_value:
+          type: string
+        is_primary:
+          type: boolean
+      required: [label_type, label_value, is_primary]
     ArticleImage:
       type: object
       additionalProperties: false
@@ -448,6 +488,10 @@ components:
           - ready
           - preview
           - no_text
+        labels:
+          type: array
+          items:
+            $ref: '#/components/schemas/ArticleLabel'
         content:
           anyOf:
           - type: string

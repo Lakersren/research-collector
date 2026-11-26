@@ -22,6 +22,7 @@ import httpx
 from jsonschema import Draft202012Validator, RefResolver
 import pymysql
 import yaml
+from aris.kb import article_content_hash
 from aris.read_data import ArticleReader, CursorCodec, ImageSigner, ReadError, SearchQuery, read_session
 from aris.read_api import create_read_app
 from aris.mcp_bridge import MCPBridge
@@ -52,7 +53,7 @@ class SQLiteCursor:
             self.cursor.execute('PRAGMA query_only=ON')
             self.cursor.execute('BEGIN')
             return
-        sql=sql.replace('CAST(d.id AS BINARY)','CAST(d.id AS BLOB)').replace('CAST(%s AS BINARY)','CAST(%s AS BLOB)')
+        sql=sql.replace('CAST(id AS BINARY)','CAST(id AS BLOB)').replace('CAST(d.id AS BINARY)','CAST(d.id AS BLOB)').replace('CAST(%s AS BINARY)','CAST(%s AS BLOB)')
         sql=sql.replace("LEFT(TRIM(REGEXP_REPLACE(d.content,'[[:space:]]+',' ')),300)",
                         "substr(trim(regexp_replace(d.content,'[[:space:]]+',' ')),1,300)")
         self.cursor.execute(sql.replace('%s','?'),params)
@@ -92,7 +93,8 @@ class Fixture(unittest.TestCase):
             db.executescript('''
                 CREATE TABLE source(id TEXT PRIMARY KEY,n_docs INTEGER,first_ts DATETIME,last_ts DATETIME);
                 CREATE TABLE doc(id TEXT PRIMARY KEY,source_id TEXT,title TEXT,authors TEXT,published_at DATETIME,
-                                 ingested_at DATETIME,url TEXT,content_state TEXT,content TEXT);
+                                 ingested_at DATETIME,url TEXT,content_state TEXT,content TEXT,content_hash BLOB);
+                CREATE TABLE doc_label(doc_id TEXT,label_type TEXT,label_value TEXT,is_primary INTEGER,labeled_at DATETIME);
                 CREATE TABLE doc_image(doc_id TEXT,position INTEGER,file_key TEXT,status TEXT,width INTEGER,height INTEGER);
             ''')
             db.execute('INSERT INTO source VALUES(?,?,?,?)',(SOURCE,5,datetime(2026,1,1,9),datetime(2026,1,1,10)))
@@ -103,11 +105,11 @@ class Fixture(unittest.TestCase):
                 ('D','Preview','preview',None),
                 ('E','Only title','no_text',None),
             ]):
-                db.execute('INSERT INTO doc VALUES(?,?,?,?,?,?,?,?,?)',
+                db.execute('INSERT INTO doc VALUES(?,?,?,?,?,?,?,?,?,?)',
                            (SOURCE+':'+name,SOURCE,title,'["作者"]',published,datetime(2026,1,2,8,index),
-                            'https://example.test/'+name,state,None if state=='no_text' else '  Full\n body [图1] [图2]  '))
-            db.execute('INSERT INTO doc VALUES(?,?,?,?,?,?,?,?,?)',('hidden','hidden-source','private','[]',None,
-                        datetime(2026,1,2),'https://example.test/private','ready','private body'))
+                            'https://example.test/'+name,state,None if state=='no_text' else '  Full\n body [图1] [图2]  ', None))
+            db.execute('INSERT INTO doc VALUES(?,?,?,?,?,?,?,?,?,?)',('hidden','hidden-source','private','[]',None,
+                        datetime(2026,1,2),'https://example.test/private','ready','private body',None))
             db.executemany('INSERT INTO doc_image VALUES(?,?,?,?,?,?)',[
                 (SOURCE+':A',1,'overseas-corpus/images/a.png','ok',120,80),
                 (SOURCE+':A',2,None,'failed',None,None)])
@@ -132,6 +134,28 @@ class Fixture(unittest.TestCase):
 
 
 class ReadAPITests(Fixture):
+    def test_merge_follows_filters_and_paginates_representatives(self):
+        content_hash = article_content_hash('ready', ' Full\r\n body [图1] [图2] ')
+        with sqlite3.connect(self.dbpath) as db:
+            db.execute('UPDATE doc SET content_hash=? WHERE id IN (?,?)',
+                       (content_hash, SOURCE + ':A', SOURCE + ':B'))
+            db.execute('UPDATE doc SET source_id=? WHERE id=?', (SECOND, SOURCE + ':A'))
+            db.execute('INSERT INTO doc_label VALUES(?,?,?,?,?)',
+                       (SOURCE + ':A', 'theme', 'CPO概念', False, NOW))
+        query = {'merge_duplicates': 'true', 'page_size': '1'}
+        first = self.get('/articles', params=query)
+        self.assert_contract('ArticlesResponse', first)
+        first_data = first.json()['data']
+        self.assertEqual(first_data['items'][0]['id'], SOURCE + ':B')
+        self.assertEqual(first_data['items'][0]['source_count'], 2)
+        next_page = self.get('/articles', params={**query, 'cursor': first_data['page']['next_cursor']})
+        self.assertEqual(next_page.json()['data']['items'][0]['id'], SOURCE + ':C')
+        filtered = self.get('/articles', params={**query, 'theme': 'CPO概念', 'source_id': SECOND})
+        item = filtered.json()['data']['items'][0]
+        self.assertEqual(item['id'], SOURCE + ':A')
+        self.assertEqual(item['source_count'], 1)
+        self.assertEqual(item['labels'][0]['label_value'], 'CPO概念')
+
     def test_sources_include_configured_but_empty_and_hide_internals(self):
         response=self.get('/sources')
         self.assertEqual(response.status_code,200)
@@ -213,8 +237,8 @@ class ReadAPITests(Fixture):
         db=sqlite3.connect(self.dbpath)
         self.addCleanup(db.close)
         with db:
-            db.execute('INSERT INTO doc VALUES(?,?,?,?,?,?,?,?,?)',(SOURCE+':NEW',SOURCE,'new','[]',datetime(2025,1,1),
-                        (NOW+timedelta(seconds=1)).replace(tzinfo=None),'https://example.test/new','ready','new'))
+            db.execute('INSERT INTO doc VALUES(?,?,?,?,?,?,?,?,?,?)',(SOURCE+':NEW',SOURCE,'new','[]',datetime(2025,1,1),
+                        (NOW+timedelta(seconds=1)).replace(tzinfo=None),'https://example.test/new','ready','new',None))
         result=self.get('/articles',params={'page_size':1,'cursor':first})
         self.assertNotIn(SOURCE+':NEW',json.dumps(result.json()))
 
@@ -291,7 +315,7 @@ class MCPTests(Fixture):
         response=self.rpc('tools/list')
         self.assertEqual(response.status_code,200,response.text)
         self.assertEqual(len(response.json()['result']['tools']),4)
-        for name,args in [('list_sources',{}),('search_articles',{'q':'NVIDIA','page_size':1}),
+        for name,args in [('list_sources',{}),('search_articles',{'q':'NVIDIA','page_size':1,'merge_duplicates':True}),
                           ('get_article',{'id':SOURCE+':A'}),('get_article_images',{'id':SOURCE+':A'})]:
             response=self.rpc('tools/call',{'name':name,'arguments':args})
             self.assertEqual(response.status_code,200,response.text)

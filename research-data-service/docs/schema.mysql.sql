@@ -23,8 +23,10 @@ CREATE TABLE IF NOT EXISTS `doc` (
   `url` TEXT NOT NULL,
   `content_state` VARCHAR(16) NOT NULL,
   `content` LONGTEXT NULL,
+  `content_hash` BINARY(32) NULL,
   `ingested_at` DATETIME(6) NOT NULL,
   PRIMARY KEY (`id`),
+  KEY `idx_doc_content_hash` (`content_hash`),
   KEY `idx_doc_source_published` (`source_id`, `published_at`),
   CONSTRAINT `fk_overseas_doc_source` FOREIGN KEY (`source_id`) REFERENCES `source` (`id`),
   CHECK (`content_state` IN ('ready', 'preview', 'no_text')),
@@ -60,4 +62,16 @@ CREATE TABLE IF NOT EXISTS `collection_run` (
   CONSTRAINT `fk_overseas_run_source` FOREIGN KEY (`source_id`) REFERENCES `source` (`id`),
   CHECK (`status` IN ('running', 'success', 'failed')),
   CHECK (`n_discovered` >= 0 AND `n_fetched` >= 0 AND `n_failed` >= 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE IF NOT EXISTS `doc_label` (
+  `doc_id` VARCHAR(191) NOT NULL,
+  `label_type` ENUM('industry','theme') NOT NULL,
+  `label_value` VARCHAR(128) NOT NULL,
+  `is_primary` BOOLEAN NOT NULL,
+  `labeled_at` DATETIME(6) NOT NULL,
+  PRIMARY KEY (`doc_id`, `label_type`, `label_value`),
+  KEY `idx_doc_label_filter` (`label_type`, `label_value`, `doc_id`),
+  CONSTRAINT `fk_overseas_label_doc` FOREIGN KEY (`doc_id`) REFERENCES `doc` (`id`) ON DELETE CASCADE,
+  CHECK (`is_primary` IN (0,1) AND (`label_type` = 'industry' OR `is_primary` = 0))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;

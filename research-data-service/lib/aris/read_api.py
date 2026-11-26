@@ -109,6 +109,10 @@ def create_read_app(token, cursor_secret, reader=None):
             if not values['page_size'].isascii() or not values['page_size'].isdigit():
                 raise invalid('page_size 必须是整数')
             values['page_size']=int(values['page_size'])
+        if 'merge_duplicates' in values:
+            if values['merge_duplicates'] not in ('true', 'false'):
+                raise invalid('merge_duplicates 必须为 true 或 false')
+            values['merge_duplicates'] = values['merge_duplicates'] == 'true'
         try:
             query=SearchQuery.model_validate(values)
         except ValidationError:

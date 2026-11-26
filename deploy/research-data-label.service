@@ -1,0 +1,14 @@
+[Unit]
+Description=Classify imported research articles (server B)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=corpus
+Group=corpus
+WorkingDirectory=/opt/research-data-platform/research-data-service
+EnvironmentFile=/opt/research-data-platform/research-data-service/etc/sync.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/research-data-platform/research-data-service/.venv/bin/python process_corpus.py --scheduled
+TimeoutStartSec=6h
+UMask=0077

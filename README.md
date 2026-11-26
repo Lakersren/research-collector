@@ -59,7 +59,7 @@ B 目录下加载 `etc/sync.env` 后，可手动运行：
 .venv/bin/python api_service.py
 ```
 
-systemd 会分别加载三个进程各自的配置文件。不要在同一个 shell 混合加载读写和只读配置。
+systemd 会分别加载各进程使用对应的配置文件。不要在同一个 shell 混合加载读写和只读配置。
 
 ## 查询能力
 
@@ -72,6 +72,12 @@ systemd 会分别加载三个进程各自的配置文件。不要在同一个 sh
 
 MCP 地址为服务器 B 的 `/mcp`，使用 `CORPUS_READ_API_TOKEN`。查询接口保留独立鉴权、标题筛选、时间区间、签名游标、正文三态和 15 分钟图片临时地址。无需向 Agent 提供同步令牌、写库账号或对象存储密钥。可选的 `mcp_service.py` 支持进一步独立部署 MCP 适配器。
 
+### 服务 B 语料加工升级
+
+- 已有服务由 IT 执行 [MySQL 升级 SQL](research-data-service/docs/upgrade-corpus-processing.mysql.sql)。全新部署使用 [完整建表 SQL](research-data-service/docs/schema.mysql.sql)。查询账号需要 `doc_label` 的 SELECT 权限，同步账号需要该表的 SELECT、INSERT 和 DELETE 权限。
+- 在 B 的项目目录执行 `bash setup.sh` 注册新定时任务，再执行 `bash start.sh`。在加载 `etc/sync.env` 的 shell 中执行 `.venv/bin/python process_corpus.py --backfill-content-hashes` 为历史文章补齐哈希。
+- 在 `etc/sync.env` 配置 `ARIS_LLM_BASE_URL`（包含 `/v1` 的兼容 API 根路径）、`ARIS_LLM_API_KEY` 和 `ARIS_LLM_MODEL`。每天北京时间 02:00 自动处理库中待打标的文章，也可执行 `sudo systemctl start research-data-label.service` 或在加载同一配置的 shell 里执行 `.venv/bin/python process_corpus.py`。打标日志在 `logs/processing.log`。
+
 ## 同步行为与恢复
 
 - A 仅抓取北京时间昨天发布的文章，按发表日和来源归档，完成后原子发布。B 按日期读取归档中的报告、正文和图片。
@@ -79,7 +85,7 @@ MCP 地址为服务器 B 的 `/mcp`，使用 `CORPUS_READ_API_TOKEN`。查询接
 - B 使用本地 state/sync.sqlite 保存日期及来源进度和预留的记录 ID。采集失败或零文章也写入 collection_run。传输/入库失败则停止，修复后重跑。
 - B 全量校验文件和文章后上传图片，再用一个 MySQL 事务提交整批文章、图片关联和采集记录。失败时回滚 SQL；已上传图片通过稳定对象路径复用。
 - 重复同步不会增加同 ID 文章，保留首次 `ingested_at`。成功提交后才向 A 确认；确认失败时只重发确认，提交后检查点失败也可恢复，不重复增加采集记录。
-- 生产库保留 `source`、`doc`、`doc_image`、`collection_run` 四张表，不自动执行 DDL。SQLite 是 B 本地同步状态，不是新增生产业务表。
+- 生产库包含 `source`、`doc`、`doc_image`、`collection_run` 和 `doc_label`。应用启动和运行期间只读写数据，DDL 由 IT 执行。B 使用 SQLite 保存本地同步进度。
 - A 每次采集后清理七天前的日期归档。B 仍需备份 sync.sqlite，不要清空同步进度。
 
 采集完整性与同步状态分开：外网单张图片失败仍可发布失败标记和可用文章，保留 `[图N]` 位置；B 成功接收不把原始 `collection_run.status=failed` 改成成功。同日手动重跑可重试昨天文章的失败图片；下一天不会自动补采更早日期。

@@ -57,6 +57,8 @@ class Cursor:
         self.conn.calls.append((sql,rows))
         if self.conn.fail_images:
             raise RuntimeError('failed image insert')
+    def fetchone(self):
+        return None
     def fetchall(self):
         return [(x,) for x in kb.SCHEMA[self.table] if x != self.conn.missing]
 

@@ -19,7 +19,7 @@ command -v systemctl >/dev/null || { echo '需要 Linux systemd。' >&2; exit 1;
 platform_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 case "$role" in
   collector) project=research-collector; env_files=(collector.env); units=(research-collector.service) ;;
-  data) project=research-data-service; env_files=(api.env sync.env); units=(research-data-api.service research-data-sync.service research-data-sync.timer) ;;
+  data) project=research-data-service; env_files=(api.env sync.env); units=(research-data-api.service research-data-sync.service research-data-sync.timer research-data-label.service research-data-label.timer) ;;
   *) echo '仅支持 collector 或 data' >&2; exit 1 ;;
 esac
 project_dir="$platform_dir/$project"
@@ -77,7 +77,7 @@ def quoted(value):
     return '"'+value.replace('\\','\\\\').replace('"','\\"').replace('%','%%')+'"'
 for name in units:
     target=Path('/etc/systemd/system')/name
-    if name.endswith('.timer') and target.exists():
+    if name == 'research-data-sync.timer' and target.exists():
         continue  # Preserve an already configured server-local sync time.
     text=(Path(root)/'deploy'/name).read_text()
     lines=[]
@@ -108,7 +108,7 @@ done
 if [[ "$role" == collector ]]; then
   systemctl enable research-collector.service
 else
-  systemctl enable research-data-api.service research-data-sync.timer
+  systemctl enable research-data-api.service research-data-sync.timer research-data-label.timer
 fi
 echo "初始化完成，运行账号：${run_user}；目录：${project_dir}"
 echo '已有配置、数据、日志和采集时间均保留。尚未启动服务。'

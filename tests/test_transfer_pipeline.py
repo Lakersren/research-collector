@@ -36,7 +36,7 @@ class SQLCursor:
     def __enter__(self):return self
     def __exit__(self,*args):self.cursor.close()
     def execute(self,sql,params=()):
-        sql=sql.replace('%s','?')
+        sql=sql.replace(' FOR UPDATE','').replace('%s','?')
         match=re.search(r'INSERT INTO `(source|doc)`',sql)
         if match and 'ON DUPLICATE KEY UPDATE' in sql:
             sql=sql.replace('ON DUPLICATE KEY UPDATE','ON CONFLICT(id) DO UPDATE SET')
@@ -80,7 +80,8 @@ class TransferTests(unittest.TestCase):
         with db:
             db.executescript('''
                 CREATE TABLE source(id TEXT PRIMARY KEY,name TEXT,channel TEXT,trust INTEGER,note TEXT,n_docs INTEGER,first_ts DATETIME,last_ts DATETIME);
-                CREATE TABLE doc(id TEXT PRIMARY KEY,source_id TEXT,title TEXT,authors TEXT,published_at DATETIME,url TEXT,content_state TEXT,content TEXT,ingested_at DATETIME);
+                CREATE TABLE doc(id TEXT PRIMARY KEY,source_id TEXT,title TEXT,authors TEXT,published_at DATETIME,url TEXT,content_state TEXT,content TEXT,ingested_at DATETIME,content_hash BLOB);
+                CREATE TABLE doc_label(doc_id TEXT,label_type TEXT,label_value TEXT,is_primary INTEGER,labeled_at DATETIME);
                 CREATE TABLE doc_image(doc_id TEXT,position INTEGER,file_key TEXT,status TEXT,width INTEGER,height INTEGER,PRIMARY KEY(doc_id,position));
                 CREATE TABLE collection_run(id INTEGER PRIMARY KEY AUTOINCREMENT,source_id TEXT,started_at DATETIME,finished_at DATETIME,n_discovered INTEGER,n_fetched INTEGER,n_failed INTEGER,status TEXT,error TEXT);
             ''')
