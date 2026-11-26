@@ -58,11 +58,11 @@ class DailyTests(unittest.TestCase):
             env={k:v for k,v in os.environ.items() if k not in ('ARIS_RAW_ROOT','CORPUS_RUN_ID','CORPUS_TARGET_DATE')}
             env.update(ARIS_ROOT=str(self.root),ARIS_OVERSEAS_DIRECT='1');env.pop('ARIS_PROXY_URL',None)
             result=subprocess.run([sys.executable,str(A/'run.py'),'collect','--source','fixture'],env=env,cwd=self.root,capture_output=True,text=True,timeout=20)
-            self.assertEqual(result.returncode,1,result.stderr)
+            self.assertEqual(result.returncode,3,result.stderr)
             archive = self.root / 'data/archive' / target.strftime('%Y%m%d')
             report=json.loads((archive / 'report.json').read_text())
             self.assertEqual(report['target_date'],target.isoformat())
-            self.assertEqual(report['status'],'failed')
+            self.assertEqual(report['status'],'partial_success')
             source=report['sources'][0]
             audit=source['articles']
             self.assertCountEqual([row['title'] for row in audit['success']],['Article 1','Article 4'])

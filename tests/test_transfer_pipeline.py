@@ -108,7 +108,7 @@ class TransferTests(unittest.TestCase):
             saved, files = export_source(SOURCE, stage, 'semiengineering', '2026-01-01')
             sources = [source_result(SOURCE, 'semiengineering', started, saved, files,
                                      {'n_index': 1, 'n_fetched': 1},
-                                     errors=['interrupted'] if status == 'interrupted' else ())]
+                                     errors=['incomplete'] if status in ('partial_success', 'interrupted') else ())]
             if other:
                 (stage / 'openai').mkdir()
                 sources.append(source_result(dict(key='web:openai', name='OpenAI News'), 'openai', started))
@@ -145,6 +145,12 @@ class TransferTests(unittest.TestCase):
         self.assertEqual(len(self.rows('doc')),1);self.assertEqual(self.rows('doc')[0][2],'Updated')
         self.assertEqual(self.rows('doc')[0][-1],ingested)
         self.assertEqual(len(self.rows('collection_run')),2)
+    def test_partial_archive_still_imports_articles(self):
+        self.publish(status='partial_success')
+        self.assertEqual(self.pull(), 1)
+        self.assertEqual(len(self.rows('doc')), 1)
+        self.assertEqual(self.pull(), 0)
+
     def test_checksum_failure_never_writes(self):
         self.publish();self.tamper=True
         with self.assertRaises(ValueError):self.pull()

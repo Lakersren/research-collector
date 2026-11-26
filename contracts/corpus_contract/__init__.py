@@ -201,7 +201,7 @@ class DailySource(Strict):
 class DailyResult(Strict):
     version: Literal[1] = 1
     target_date: str
-    status: Literal['success', 'failed', 'interrupted']
+    status: Literal['success', 'partial_success', 'failed', 'interrupted']
     sources: list[DailySource] = Field(min_length=1, max_length=100)
 
     @model_validator(mode='after')
@@ -220,7 +220,7 @@ class RunReport(Strict):
     timezone:Literal['Asia/Shanghai']='Asia/Shanghai'
     started_at:str
     finished_at:str
-    status:Literal['success','failed','interrupted']
+    status:Literal['success','partial_success','failed','interrupted']
     sources:list[RunSource]=Field(min_length=1,max_length=100)
     _time=field_validator('started_at','finished_at')(valid_time)
     @field_validator('target_date')

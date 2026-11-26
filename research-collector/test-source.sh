@@ -102,7 +102,9 @@ def show_source(source, target):
 def show_result(job):
     directory = ROOT / "data/archive" / job["target_date"].replace("-", "")
     report_file = directory / "report.json"
-    print(f"任务状态：{job['status']}")
+    status = job['status']
+    label = '部分成功（partial_success）' if status == 'partial_success' else status
+    print(f"任务状态：{label}")
     if job.get("error"):
         print(job["error"])
     if not report_file.is_file():
@@ -112,13 +114,13 @@ def show_result(job):
     print(f"目标发布日期（北京时间）：{report['target_date']}")
     print(f"采集任务完成表：{directory / 'report.md'}")
     print(f"正文和图片目录：{directory}")
-    if job["status"] != "success":
+    if status not in ("success", "partial_success"):
         print(f"采集日志：{ROOT / 'logs/pipeline.log'}")
         return 1
     selected = set(job['sources'])
     results = [show_source(source, report["target_date"]) for source in report["sources"]
                if source['source_id'] in selected]
-    return int(not all(results))
+    return 3 if status == "partial_success" else int(not all(results))
 
 
 def main():

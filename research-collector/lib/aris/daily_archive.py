@@ -29,6 +29,18 @@ def exchange_directories(staging, destination):
         raise OSError(error, os.strerror(error), destination)
 
 
+PARTIAL_SUCCESS_EXIT_CODE = 3
+
+
+def collection_status(sources):
+    if all(source['collection']['status'] == 'success' for source in sources):
+        return 'success'
+    if any(source['collection']['status'] == 'success' or source['articles']['success']
+           for source in sources):
+        return 'partial_success'
+    return 'failed'
+
+
 def publish_date(data, staging, attempt, replace_all=False):
     root = data / 'archive'
     root.mkdir(exist_ok=True)
@@ -38,7 +50,7 @@ def publish_date(data, staging, attempt, replace_all=False):
     saved = attempt.copy()
     if exists:
         previous = json.loads((destination / 'report.json').read_text(encoding='utf-8'))
-        keep_previous = attempt['status'] != 'success'
+        keep_previous = attempt['status'] in ('failed', 'interrupted')
         if keep_previous:
             for source in current.values():
                 folder = staging / source['directory']
@@ -46,18 +58,27 @@ def publish_date(data, staging, attempt, replace_all=False):
                     shutil.rmtree(folder)
             saved = {key: value for key, value in previous.items() if key not in ('id', 'latest_attempt')}
             current.clear()
-        if keep_previous or not replace_all:
+        if keep_previous or not replace_all or attempt['status'] == 'partial_success':
             for source in previous['sources']:
-                if source['source_id'] not in current:
-                    for key in ('batch_id', 'run_id', 'run_finished_at'):
-                        source.pop(key, None)
-                    folder = source['directory']
-                    shutil.copytree(destination / folder, staging / folder, copy_function=os.link)
-                    current[source['source_id']] = source
+                source_id = source['source_id']
+                replacement = current.get(source_id)
+                if replacement and (replacement['collection']['status'] == 'success'
+                                    or replacement['articles']['success']
+                                    or not source['articles']['success']):
+                    continue
+                if not replacement and replace_all and not keep_previous:
+                    continue
+                for key in ('batch_id', 'run_id', 'run_finished_at'):
+                    source.pop(key, None)
+                folder = source['directory']
+                if replacement:
+                    shutil.rmtree(staging / folder)
+                shutil.copytree(destination / folder, staging / folder, copy_function=os.link)
+                current[source_id] = source
 
     saved['sources'] = list(current.values())
-    if saved['status'] == 'success' and any(s['collection']['status'] == 'failed' for s in current.values()):
-        saved['status'] = 'failed'
+    if attempt['status'] in ('success', 'partial_success'):
+        saved['status'] = collection_status(saved['sources'])
     # The latest attempt is useful even when its files were discarded.
     saved['latest_attempt'] = {
         **{key: value for key, value in attempt.items() if key != 'sources'},

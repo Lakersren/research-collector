@@ -3,13 +3,15 @@ import hashlib
 import logging
 import mimetypes
 from aris.observability import log_context
-from aris.web_media import SiteStore, sniff_ext
+from aris.web_media import SiteStore
+from corpus_contract import image_ext
 from aris.paths import RAW
 
 log = logging.getLogger('corpus.images')
 
 def sync_images(source, objects):
     from collectors.web_media_dl import wanted, try_one
+    from collectors.sites import nvidia
     if source['_seg']=='semi':
         from collectors.semianalysis_media import wanted as semi_wanted
         need=semi_wanted()
@@ -31,12 +33,17 @@ def sync_images(source, objects):
                 p=(RAW/row['file']).resolve()
                 if p.is_relative_to(RAW.resolve()) and p.is_file():
                     body=p.read_bytes()
-            ctype=mimetypes.guess_type(row.get('file',''))[0] or 'application/octet-stream'
-            if not body:
-                for url in req['cands']:
+            ext = image_ext(body) if body else None
+            candidates = req['cands']
+            if source['key'] == 'web:nvidia_dev':
+                candidates = list(dict.fromkeys(url for original in candidates
+                                                for url in nvidia.image_candidates(original)))
+            if not ext:
+                for url in candidates:
                     try:
-                        body,ctype,_=try_one(url,source.get('host') or source.get('feed') or key,30)
-                        if not sniff_ext(body,ctype):
+                        body,_,_=try_one(url,source.get('host') or source.get('feed') or key,30)
+                        ext = image_ext(body)
+                        if not ext:
                             raise ValueError('响应不是支持的图片')
                         break
                     except Exception:
@@ -45,13 +52,10 @@ def sync_images(source, objects):
                         body=None
                 if not body:
                     raise RuntimeError('所有图片地址获取失败')
-            ext=sniff_ext(body,ctype)
-            if not ext:
-                raise ValueError('无法识别图片格式')
             file_key=objects.key(source['key'], key, ext)
             if not objects.exists(file_key):
                 with log_context(image_ref=hashlib.sha256(key.encode()).hexdigest()[:16], stage='image_upload'):
-                    objects.upload(file_key,body,mimetypes.guess_type('image.'+ext)[0] or ctype)
+                    objects.upload(file_key,body,mimetypes.guess_type('image.'+ext)[0] or 'application/octet-stream')
                 uploaded+=1
                 log.info('image_uploaded file_key=%s bytes=%s', file_key, len(body))
             ledger[key]={**row,'key':key,'candidates':req['cands'],'file_key':file_key,

@@ -10,6 +10,7 @@ import sys
 import threading
 import uuid
 
+from aris.daily_archive import PARTIAL_SUCCESS_EXIT_CODE
 from aris.observability import log_context
 from aris.paths import ROOT, STATE
 
@@ -132,8 +133,11 @@ class Dispatcher:
                 reader.start()
                 try:
                     code = process.wait(timeout=record['timeout_seconds'])
-                    record.update(exit_code=code, status='success' if code == 0 else 'failed',
-                                  error=None if code == 0 else '采集任务失败，请按 job_id 查询 pipeline.log')
+                    status, error = {
+                        0: ('success', None),
+                        PARTIAL_SUCCESS_EXIT_CODE: ('partial_success', '部分采集成功，详情见采集报告'),
+                    }.get(code, ('failed', '采集任务失败，请按 job_id 查询 pipeline.log'))
+                    record.update(exit_code=code, status=status, error=error)
                 except subprocess.TimeoutExpired:
                     process.terminate()
                     try:
@@ -146,7 +150,7 @@ class Dispatcher:
                     log.error('job_timeout seconds=%s', record['timeout_seconds'])
                 finally:
                     reader.join(timeout=2)
-                if self.stopping and record.get('exit_code') != 0:
+                if self.stopping and record['status'] == 'failed':
                     record.update(status='interrupted', error='服务停止，任务中断')
             except Exception:
                 record.update(status='failed', error='执行器异常，请按 job_id 查询 service.log')
@@ -159,7 +163,9 @@ class Dispatcher:
                 record['finished_at'] = now()
                 try:
                     self._save(record)
-                    log.log(logging.INFO if record['status']=='success' else logging.ERROR,
+                    level = {'success': logging.INFO, 'partial_success': logging.WARNING}.get(
+                        record['status'], logging.ERROR)
+                    log.log(level,
                             'job_finished status=%s exit_code=%s', record['status'], record['exit_code'])
                 finally:
                     with self.guard:

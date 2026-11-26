@@ -77,6 +77,15 @@ class DispatchTests(unittest.TestCase):
         process.terminate.assert_called_once()
         process.kill.assert_called_once()
 
+    def test_partial_worker_status_is_preserved(self):
+        process = Mock(stdout=io.StringIO(''))
+        process.wait.return_value = 3
+        with patch('aris.dispatch.subprocess.Popen', return_value=process):
+            dispatcher = Dispatcher(self.state)
+            record = dispatcher.submit(sources=['servethehome'])
+            dispatcher.thread.join(3)
+        self.assertEqual(dispatcher.get(record['id'])['status'], 'partial_success')
+
     def test_worker_failure_is_not_reported_as_success(self):
         process = Mock(stdout=io.StringIO(''))
         process.wait.return_value = 75

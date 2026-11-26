@@ -125,7 +125,6 @@ rss:
     name: Stratechery
     feed: https://stratechery.com/feed/
     full_in_feed: true
-    ua: "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"  # 2026-09-11：WAF 封 Chrome UA（235 轮 403），Firefox UA 可通
     note: >-
       10 条/次，**`content:encoded` 含全文**（实测 4,363 字符）⇒ 零额外请求。
       ⚠️ 免费 feed 只放 "This Week in Stratechery" 汇总与免费文，

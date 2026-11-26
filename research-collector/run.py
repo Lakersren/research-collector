@@ -36,7 +36,8 @@ from aris.kb_adapters import sources
 from aris.local_images import LocalImages
 from aris.article_audit import capture
 from aris.archive_source import export_source, source_result, stamp
-from aris.daily_archive import prune_dates, publish_date, source_directory
+from aris.daily_archive import (PARTIAL_SUCCESS_EXIT_CODE, collection_status, prune_dates,
+                                publish_date, source_directory)
 from aris.daily_policy import publication_day, normalize_target_date, yesterday
 from aris.image_ingest import sync_images
 from aris.observability import log_context, setup_logging
@@ -253,18 +254,14 @@ def collect_day(rows, args, job_id, work):
         folder = source_directory(source['key'])
         (args.staging / folder).mkdir(exist_ok=True)
         results.append(source_result(source, folder, stamp(), errors=['任务中断，来源未执行']))
-    status = 'success'
-    if stopping.is_set():
-        status = 'interrupted'
-    elif any(result['collection']['status'] == 'failed' for result in results):
-        status = 'failed'
+    status = 'interrupted' if stopping.is_set() else collection_status(results)
     report = dict(version=1, job_id=job_id, target_date=args.target_date, timezone='Asia/Shanghai',
                   execution_date=publication_day(started_at).isoformat(), started_at=started_at,
                   finished_at=stamp(), status=status, sources=results)
     destination = publish_date(DATA, args.staging, report, replace_all)
     prune_dates(DATA)
     log.info('daily_archive_published path=%s status=%s', destination, status)
-    return int(status != 'success')
+    return {'success': 0, 'partial_success': PARTIAL_SUCCESS_EXIT_CODE}.get(status, 1)
 
 
 if __name__ == '__main__':

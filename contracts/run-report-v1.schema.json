@@ -152,6 +152,7 @@
       "enum": [
         "success",
         "failed",
+        "partial_success",
         "interrupted"
       ],
       "title": "Status",

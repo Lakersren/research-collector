@@ -6,7 +6,7 @@ from urllib.parse import quote, urlsplit
 from aris.daily_policy import SHANGHAI
 
 
-STATUS = {"success": "成功", "failed": "失败", "interrupted": "中断"}
+STATUS = {"success": "成功", "partial_success": "部分成功", "failed": "失败", "interrupted": "中断"}
 
 
 def cell(value):
@@ -106,7 +106,11 @@ def render(report):
         else:
             lines.append("本轮没有逐篇记录。")
     latest = report.get('latest_attempt', report)
-    if latest['job_id'] != report['job_id']:
-        lines += ["", f"最近一次执行 {STATUS[latest['status']]}，已保留此前的文章结果。"]
+    if latest['job_id'] != report['job_id'] or latest['status'] == 'partial_success':
+        lines += ["", f"最近一次执行 {STATUS[latest['status']]}。"]
+        for source in latest['sources']:
+            result = source['collection']
+            if result['status'] == 'failed':
+                lines.append(f"- {cell(source['source_name'])} · {cell(result.get('error'))}")
     lines += ["", f"最近任务 ID `{latest['job_id']}` · [JSON 报告](report.json)", ""]
     return "\n".join(lines)
